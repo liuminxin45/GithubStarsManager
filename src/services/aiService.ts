@@ -72,7 +72,7 @@ export class AIService {
             max_tokens: options.maxTokens,
           };
 
-      let data: any;
+      let data: Record<string, unknown> | undefined;
       if (backend.isAvailable && this.config.id) {
         data = await backend.proxyAIRequest(this.config.id, requestBody);
       } else {
@@ -100,8 +100,8 @@ export class AIService {
         const output = data?.output;
         if (Array.isArray(output)) {
           const text = output
-            .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
-            .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+            .flatMap((item: {content?: unknown}) => Array.isArray(item?.content) ? item.content : [])
+            .map((part: {text?: string}) => (typeof part?.text === 'string' ? part.text : ''))
             .join('');
           if (text) return text;
         }
@@ -484,7 +484,7 @@ Focus on practicality and accurate categorization to help users quickly understa
       } finally {
         clearTimeout(timeoutId);
       }
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -523,11 +523,37 @@ Focus on practicality and accurate categorization to help users quickly understa
     console.log('🤖 AI Service: Starting enhanced search for:', query);
     if (!query.trim()) return repositories;
 
-    // 直接使用增强的基础搜索，提供智能排序
-    console.log('🔄 AI Service: Using enhanced basic search with intelligent ranking');
+    try {
+      // 调用 AI 分析搜索意图，提取关键词
+      console.log('🔄 AI Service: Calling AI to analyze search intent...');
+      const searchPrompt = this.createSearchPrompt(query);
+
+      const system = this.language === 'zh'
+        ? '你是一个智能搜索助手。请分析用户的搜索意图，提取关键词并提供多语言翻译。'
+        : 'You are an intelligent search assistant. Please analyze user search intent, extract keywords and provide multilingual translations.';
+
+      const content = await this.requestText({
+        system,
+        user: searchPrompt,
+        temperature: 0.1,
+        maxTokens: 200,
+      });
+
+      if (content) {
+        const searchTerms = this.parseSearchResponse(content);
+        console.log('✨ AI Service: AI returned search terms:', searchTerms);
+        const results = this.performEnhancedSearch(repositories, query, searchTerms);
+        console.log('✨ AI Service: Enhanced search completed, results:', results.length);
+        return results;
+      }
+    } catch (error) {
+      console.warn('🤖 AI Service: AI search failed, falling back to basic search:', error);
+    }
+
+    // Fallback to enhanced basic search
+    console.log('🔄 AI Service: Using enhanced basic search as fallback');
     const results = this.performEnhancedBasicSearch(repositories, query);
     console.log('✨ AI Service: Enhanced search completed, results:', results.length);
-    
     return results;
   }
 
@@ -808,7 +834,12 @@ Note: Ensure cross-language matching, so Chinese queries can match English repos
   private performSemanticSearchWithReranking(
     repositories: Repository[], 
     originalQuery: string, 
-    searchAnalysis: any
+    searchAnalysis: {
+      keywords: { primary: string[]; secondary: string[]; technical: string[] };
+      categories: string[];
+      platforms: string[];
+      synonyms: string[];
+    }
   ): Repository[] {
     // Collect all search terms from the analysis
     const allSearchTerms = [

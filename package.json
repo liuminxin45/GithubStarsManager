@@ -14,16 +14,20 @@
     "dist": "electron-builder",
     "update-version": "node scripts/update-version.cjs",
     "dev:server": "cd server && npm run dev",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "dev:all": "node scripts/kill-ports.js 5173,3000 && concurrently \"npm run dev\" \"npm run dev:server\"",
     "build:server": "cd server && npm run build",
     "build:all": "npm run build && npm run build:server"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.23",
+    "clsx": "^2.1.1",
     "date-fns": "^3.3.1",
+    "framer-motion": "^12.38.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.22.0",
+    "tailwind-merge": "^3.5.0",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
@@ -32,6 +36,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
+    "concurrently": "^8.2.0",
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
@@ -41,7 +46,6 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.2",
-    "xml2js": "^0.6.2",
-    "concurrently": "^8.2.0"
+    "xml2js": "^0.6.2"
   }
 }

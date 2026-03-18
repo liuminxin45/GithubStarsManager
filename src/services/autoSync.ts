@@ -26,7 +26,7 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 const POLL_INTERVAL = 5000;
 
 // Last known backend data fingerprints — skip store update if unchanged
-let _lastHash = {
+const _lastHash = {
   repos: '',
   releases: '',
   ai: '',

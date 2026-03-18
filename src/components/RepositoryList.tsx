@@ -1,20 +1,35 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Bot, ChevronDown, Pause, Play } from 'lucide-react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { RepositoryCard } from './RepositoryCard';
+import { EmptyState } from './EmptyState';
+import { ErrorState } from './ErrorState';
+import { ControlBar } from './ControlBar';
+import { RepositoryCardSkeleton } from '../design-system/components/Skeleton/RepositoryCardSkeleton';
 
 import { Repository } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { GitHubApiService } from '../services/githubApi';
 import { AIService } from '../services/aiService';
 
+// 防抖钩子
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debouncedValue;
+}
+
+
 interface RepositoryListProps {
   repositories: Repository[];
   selectedCategory: string;
 }
 
-export const RepositoryList: React.FC<RepositoryListProps> = ({ 
-  repositories, 
-  selectedCategory 
+export const RepositoryList: React.FC<RepositoryListProps> = ({
+  repositories,
+  selectedCategory
 }) => {
   const {
     githubToken,
@@ -27,326 +42,241 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
     customCategories,
     analysisProgress,
     setAnalysisProgress,
-    searchFilters
+    searchFilters,
+    isSemanticSearch
   } = useAppStore();
 
-  const [showAISummary, setShowAISummary] = useState(true);
-  const [showDropdown, setShowDropdown] = useState(false);
+  const [showAISummary] = useState(true);
+
+  // 防抖搜索词
+  const debouncedSearchQuery = useDebounce(searchFilters.query, 150);
   const [isPaused, setIsPaused] = useState(false);
-  const [disableCardAnimations, setDisableCardAnimations] = useState(false);
-  const previousCategoryRef = useRef(selectedCategory);
-  const savedScrollYRef = useRef<number | null>(null);
-  const restoreScrollFrameRef = useRef<number | null>(null);
-  
-  // 使用 useRef 来管理停止状态，确保在异步操作中能正确访问最新值
+  const [error, setError] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
   const shouldStopRef = useRef(false);
   const isAnalyzingRef = useRef(false);
 
-  const allCategories = getAllCategories(customCategories, language);
+  // Virtual list container ref
+  const parentRef = useRef<HTMLDivElement>(null);
 
-  // Filter repositories by selected category
-  const filteredRepositories = repositories.filter(repo => {
-    if (selectedCategory === 'all') return true;
-    
-    const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
-    if (!selectedCategoryObj) return false;
-
-    // Check custom category first
-    if (repo.custom_category === selectedCategoryObj.name) {
-      return true;
-    }
-    
-    // 优先使用AI标签进行匹配
-    if (repo.ai_tags && repo.ai_tags.length > 0) {
-      return repo.ai_tags.some(tag => 
-        selectedCategoryObj.keywords.some(keyword => 
-          tag.toLowerCase().includes(keyword.toLowerCase()) ||
-          keyword.toLowerCase().includes(tag.toLowerCase())
-        )
-      );
-    }
-    
-    // 如果没有AI标签，使用传统方式匹配
-    const repoText = [
-      repo.name,
-      repo.description || '',
-      repo.language || '',
-      ...(repo.topics || []),
-      repo.ai_summary || ''
-    ].join(' ').toLowerCase();
-    
-    return selectedCategoryObj.keywords.some(keyword => 
-      repoText.includes(keyword.toLowerCase())
-    );
-  });
-
-  // Infinite scroll (瀑布流按需加载)
-  const LOAD_BATCH = 50;
-  const [visibleCount, setVisibleCount] = useState(LOAD_BATCH);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-
-  const startIndex = filteredRepositories.length === 0 ? 0 : 1;
-  const endIndex = Math.min(visibleCount, filteredRepositories.length);
-  const visibleRepositories = filteredRepositories.slice(0, visibleCount);
-  const filterResetKey = useMemo(() => JSON.stringify({
-    selectedCategory,
-    query: searchFilters.query,
-    languages: searchFilters.languages,
-    tags: searchFilters.tags,
-    platforms: searchFilters.platforms,
-    sortBy: searchFilters.sortBy,
-    sortOrder: searchFilters.sortOrder,
-    minStars: searchFilters.minStars,
-    maxStars: searchFilters.maxStars,
-    isAnalyzed: searchFilters.isAnalyzed,
-    isSubscribed: searchFilters.isSubscribed,
-  }), [
-    selectedCategory,
-    searchFilters.query,
-    searchFilters.languages,
-    searchFilters.tags,
-    searchFilters.platforms,
-    searchFilters.sortBy,
-    searchFilters.sortOrder,
-    searchFilters.minStars,
-    searchFilters.maxStars,
-    searchFilters.isAnalyzed,
-    searchFilters.isSubscribed,
-  ]);
-
-  // Reset visible count only when filter context changes.
-  useEffect(() => {
-    setVisibleCount(LOAD_BATCH);
-  }, [filterResetKey]);
+  // Responsive column count
+  const [columnCount, setColumnCount] = useState(1);
 
   useEffect(() => {
-    if (previousCategoryRef.current !== selectedCategory) {
-      window.scrollTo({ top: 0, behavior: 'auto' });
-      previousCategoryRef.current = selectedCategory;
-    }
-  }, [selectedCategory]);
-
-  // Clamp visible count when result set becomes smaller, but do not collapse
-  // back to the initial batch during backend sync refreshes.
-  useEffect(() => {
-    setVisibleCount((count) => {
-      if (filteredRepositories.length === 0) return LOAD_BATCH;
-      return Math.min(count, filteredRepositories.length);
-    });
-  }, [filteredRepositories.length]);
-
-  // IntersectionObserver to load more on demand
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting) {
-          setVisibleCount((count) => {
-            if (count >= filteredRepositories.length) return count;
-            return Math.min(count + LOAD_BATCH, filteredRepositories.length);
-          });
-        }
-      },
-      { root: null, rootMargin: '200px', threshold: 0 }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [filteredRepositories.length]);
-
-  useEffect(() => {
-    const handleSyncVisualState = (event: Event) => {
-      const customEvent = event as CustomEvent<{ isSyncing?: boolean }>;
-      const isSyncing = !!customEvent.detail?.isSyncing;
-      setDisableCardAnimations(isSyncing);
-
-      if (isSyncing) {
-        savedScrollYRef.current = window.scrollY;
-        if (restoreScrollFrameRef.current !== null) {
-          cancelAnimationFrame(restoreScrollFrameRef.current);
-          restoreScrollFrameRef.current = null;
-        }
-        return;
-      }
-
-      const targetScrollY = savedScrollYRef.current;
-      if (targetScrollY === null) return;
-
-      restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
-        restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
-          window.scrollTo({ top: targetScrollY, behavior: 'auto' });
-          restoreScrollFrameRef.current = null;
-          savedScrollYRef.current = null;
-        });
-      });
+    const updateColumnCount = () => {
+      const width = window.innerWidth;
+      if (width >= 1536) setColumnCount(4);      // 2xl:grid-cols-4
+      else if (width >= 1280) setColumnCount(3); // xl:grid-cols-3
+      else if (width >= 768) setColumnCount(2);  // md:grid-cols-2
+      else setColumnCount(1);                    // grid-cols-1
     };
 
-    window.addEventListener('gsm:repository-sync-visual-state', handleSyncVisualState as EventListener);
-    return () => {
-      if (restoreScrollFrameRef.current !== null) {
-        cancelAnimationFrame(restoreScrollFrameRef.current);
-      }
-      window.removeEventListener('gsm:repository-sync-visual-state', handleSyncVisualState as EventListener);
-    };
+    updateColumnCount();
+    window.addEventListener('resize', updateColumnCount);
+    return () => window.removeEventListener('resize', updateColumnCount);
   }, []);
 
-  const handleAIAnalyze = async (analyzeUnanalyzedOnly: boolean = false, analyzeFailedOnly: boolean = false) => {
+  const allCategories = getAllCategories(customCategories, language);
+
+  // 分步骤筛选 - 减少重复计算
+  // Step 1: 分类筛选
+  const categoryFiltered = useMemo(() => {
+    if (selectedCategory === 'all') return repositories;
+
+    const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
+    if (!selectedCategoryObj) return [];
+
+    return repositories.filter(repo => {
+      if (repo.custom_category === selectedCategoryObj.name) return true;
+
+      if (repo.ai_tags?.length) {
+        return repo.ai_tags.some(tag =>
+          selectedCategoryObj.keywords.some(keyword =>
+            tag.toLowerCase().includes(keyword.toLowerCase()) ||
+            keyword.toLowerCase().includes(tag.toLowerCase())
+          )
+        );
+      }
+
+      const repoText = [
+        repo.name,
+        repo.description || '',
+        repo.language || '',
+        ...(repo.topics || []),
+        repo.ai_summary || ''
+      ].join(' ').toLowerCase();
+
+      return selectedCategoryObj.keywords.some(keyword =>
+        repoText.includes(keyword.toLowerCase())
+      );
+    });
+  }, [repositories, selectedCategory, allCategories]);
+
+  // Step 2: 搜索词筛选（使用防抖后的值）
+  // 如果是AI语义搜索结果，跳过字符串匹配过滤
+  const searchFiltered = useMemo(() => {
+    if (isSemanticSearch) return categoryFiltered;
+    if (!debouncedSearchQuery) return categoryFiltered;
+
+    const query = debouncedSearchQuery.toLowerCase();
+    return categoryFiltered.filter(repo =>
+      repo.name.toLowerCase().includes(query) ||
+      repo.full_name.toLowerCase().includes(query) ||
+      (repo.description?.toLowerCase().includes(query) ?? false)
+    );
+  }, [categoryFiltered, debouncedSearchQuery, isSemanticSearch]);
+
+  // Step 3: 语言筛选
+  const languageFiltered = useMemo(() => {
+    if (searchFilters.languages.length === 0) return searchFiltered;
+
+    return searchFiltered.filter(repo =>
+      searchFilters.languages.includes(repo.language || '')
+    );
+  }, [searchFiltered, searchFilters.languages]);
+
+  // Step 4: 排序
+  const filteredRepositories = useMemo(() => {
+    const sorted = [...languageFiltered];
+    const order = searchFilters.sortOrder === 'asc' ? 1 : -1;
+
+    switch (searchFilters.sortBy) {
+      case 'stars':
+        sorted.sort((a, b) => (a.stargazers_count - b.stargazers_count) * order);
+        break;
+      case 'updated':
+        sorted.sort((a, b) =>
+          (new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()) * order
+        );
+        break;
+      case 'name':
+        sorted.sort((a, b) => a.name.localeCompare(b.name) * order);
+        break;
+      case 'starred':
+        sorted.sort((a, b) =>
+          (new Date(a.starred_at || 0).getTime() - new Date(b.starred_at || 0).getTime()) * order
+        );
+        break;
+    }
+    return sorted;
+  }, [languageFiltered, searchFilters.sortBy, searchFilters.sortOrder]);
+
+  // Virtual grid setup - 优化配置
+  const rowCount = Math.ceil(filteredRepositories.length / columnCount);
+  const CARD_HEIGHT = 232; // Fixed card height (increased to prevent overlap)
+  const GAP_SIZE = 16;     // gap-4 = 16px (increased vertical spacing)
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: useCallback(() => CARD_HEIGHT + GAP_SIZE, []),
+    overscan: 5, // 优化为 5 行，平衡滚动流畅度和 DOM 节点数
+    getItemKey: useCallback((index: number) => `row-${index}-${columnCount}`, [columnCount]),
+    measureElement: useCallback((el: HTMLElement) => el.getBoundingClientRect().height, []),
+    scrollPaddingEnd: 0,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+
+  const unanalyzedCount = filteredRepositories.filter(r => !r.analyzed_at).length;
+  const analyzedCount = filteredRepositories.filter(r => r.analyzed_at && !r.analysis_failed).length;
+  const failedCount = filteredRepositories.filter(r => r.analysis_failed).length;
+
+  const handleAIAnalyze = async (type: 'all' | 'unanalyzed' | 'failed') => {
     if (!githubToken) {
-      alert(language === 'zh' ? 'GitHub token 未找到，请重新登录。' : 'GitHub token not found. Please login again.');
+      setError(language === 'zh' ? 'GitHub token 未找到' : 'GitHub token not found');
       return;
     }
 
     const activeConfig = aiConfigs.find(config => config.id === activeAIConfig);
     if (!activeConfig) {
-      alert(language === 'zh' ? '请先在设置中配置AI服务。' : 'Please configure AI service in settings first.');
+      setError(language === 'zh' ? '请先在设置中配置AI服务' : 'Please configure AI service in settings');
       return;
     }
 
-    const targetRepos = analyzeFailedOnly
+    const targetRepos = type === 'failed'
       ? filteredRepositories.filter(repo => repo.analysis_failed)
-      : analyzeUnanalyzedOnly 
+      : type === 'unanalyzed'
         ? filteredRepositories.filter(repo => !repo.analyzed_at)
         : filteredRepositories;
 
     if (targetRepos.length === 0) {
-      const message = analyzeFailedOnly
-        ? (language === 'zh' ? '没有分析失败的仓库！' : 'No failed repositories to re-analyze!')
-        : analyzeUnanalyzedOnly
-          ? (language === 'zh' ? '所有仓库都已经分析过了！' : 'All repositories have been analyzed!')
-          : (language === 'zh' ? '没有可分析的仓库！' : 'No repositories to analyze!');
-      alert(message);
       return;
     }
 
-    const actionText = analyzeFailedOnly
-      ? (language === 'zh' ? '失败' : 'failed')
-      : analyzeUnanalyzedOnly 
-        ? (language === 'zh' ? '未分析' : 'unanalyzed')
-        : (language === 'zh' ? '全部' : 'all');
-    
-    const confirmMessage = language === 'zh'
-      ? `将对 ${targetRepos.length} 个${actionText}仓库进行AI分析，这可能需要几分钟时间。是否继续？`
-      : `Will analyze ${targetRepos.length} ${actionText} repositories with AI. This may take several minutes. Continue?`;
-    
-    const confirmed = confirm(confirmMessage);
-    if (!confirmed) return;
-
-    // 重置状态
     shouldStopRef.current = false;
     isAnalyzingRef.current = true;
+    setIsAnalyzing(true);
     setLoading(true);
     setAnalysisProgress({ current: 0, total: targetRepos.length });
-    setShowDropdown(false);
     setIsPaused(false);
+    setError(null);
 
     try {
       const githubApi = new GitHubApiService(githubToken);
       const aiService = new AIService(activeConfig, language);
-      
-      // 获取自定义分类名称列表
       const customCategoryNames = customCategories.map(cat => cat.name);
-      
+
       let analyzed = 0;
       const concurrency = activeConfig.concurrency || 1;
-      
-      // 并发分析函数
-      const analyzeRepository = async (repo: Repository) => {
-        // 检查是否需要停止
-        if (shouldStopRef.current) {
-          return false;
-        }
 
-        // 处理暂停
+      const analyzeRepository = async (repo: Repository) => {
+        if (shouldStopRef.current) return false;
+
         while (isPaused && !shouldStopRef.current) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        // 再次检查停止状态（暂停期间可能被停止）
-        if (shouldStopRef.current) {
-          return false;
-        }
+        if (shouldStopRef.current) return false;
 
         try {
-          // 获取README内容
           const [owner, name] = repo.full_name.split('/');
           const readmeContent = await githubApi.getRepositoryReadme(owner, name);
-          
-          // AI分析
           const analysis = await aiService.analyzeRepository(repo, readmeContent, customCategoryNames);
-          
-          // 更新仓库信息
-          const updatedRepo = {
+
+          updateRepository({
             ...repo,
             ai_summary: analysis.summary,
             ai_tags: analysis.tags,
             ai_platforms: analysis.platforms,
             analyzed_at: new Date().toISOString(),
-            analysis_failed: false // 分析成功，清除失败标记
-          };
-          
-          updateRepository(updatedRepo);
+            analysis_failed: false
+          });
+
           analyzed++;
           setAnalysisProgress({ current: analyzed, total: targetRepos.length });
-          
           return true;
         } catch (error) {
           console.warn(`Failed to analyze ${repo.full_name}:`, error);
-          
-          // 标记为分析失败
-          const failedRepo = {
+          updateRepository({
             ...repo,
             analyzed_at: new Date().toISOString(),
             analysis_failed: true
-          };
-          
-          updateRepository(failedRepo);
+          });
           analyzed++;
           setAnalysisProgress({ current: analyzed, total: targetRepos.length });
-          
           return false;
         }
       };
 
-      // 分批处理，支持并发
       for (let i = 0; i < targetRepos.length; i += concurrency) {
-        if (shouldStopRef.current) {
-          console.log('Analysis stopped by user');
-          break;
-        }
+        if (shouldStopRef.current) break;
 
         const batch = targetRepos.slice(i, i + concurrency);
-        const promises = batch.map((repo) => analyzeRepository(repo));
+        await Promise.all(batch.map(repo => analyzeRepository(repo)));
 
-        await Promise.all(promises);
-        
-        // 避免API限制，批次间稍作延迟
         if (i + concurrency < targetRepos.length && !shouldStopRef.current) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
-      
-      const completionMessage = shouldStopRef.current
-        ? (language === 'zh'
-            ? `AI分析已停止！已成功分析了 ${analyzed} 个仓库。`
-            : `AI analysis stopped! Successfully analyzed ${analyzed} repositories.`)
-        : (language === 'zh'
-            ? `AI分析完成！成功分析了 ${analyzed} 个仓库。`
-            : `AI analysis completed! Successfully analyzed ${analyzed} repositories.`);
-      
-      alert(completionMessage);
     } catch (error) {
       console.error('AI analysis failed:', error);
-      const errorMessage = language === 'zh'
-        ? 'AI分析失败，请检查AI配置和网络连接。'
-        : 'AI analysis failed. Please check AI configuration and network connection.';
-      alert(errorMessage);
+      setError(language === 'zh' ? 'AI分析失败' : 'AI analysis failed');
     } finally {
-      // 清理状态
       isAnalyzingRef.current = false;
       shouldStopRef.current = false;
+      setIsAnalyzing(false);
       setLoading(false);
       setAnalysisProgress({ current: 0, total: 0 });
       setIsPaused(false);
@@ -356,247 +286,151 @@ export const RepositoryList: React.FC<RepositoryListProps> = ({
   const handlePauseResume = () => {
     if (!isAnalyzingRef.current) return;
     setIsPaused(!isPaused);
-    console.log(isPaused ? 'Analysis resumed' : 'Analysis paused');
   };
 
   const handleStop = () => {
     if (!isAnalyzingRef.current) return;
-    
-    const confirmMessage = language === 'zh'
-      ? '确定要停止AI分析吗？已分析的结果将会保存。'
-      : 'Are you sure you want to stop AI analysis? Analyzed results will be saved.';
-    
-    if (confirm(confirmMessage)) {
-      shouldStopRef.current = true;
-      setIsPaused(false);
-      console.log('Stop requested by user');
-    }
+    shouldStopRef.current = true;
+    setIsPaused(false);
   };
 
   if (filteredRepositories.length === 0) {
     const selectedCategoryObj = allCategories.find(cat => cat.id === selectedCategory);
-    const categoryName = selectedCategoryObj?.name || selectedCategory;
-    
+
+    if (searchFilters.query) {
+      return (
+        <div className="space-y-4">
+          <ControlBar
+            filteredCount={0}
+            totalCount={repositories.length}
+            unanalyzedCount={0}
+            analyzedCount={0}
+            failedCount={0}
+            isAnalyzing={false}
+            analysisProgress={{ current: 0, total: 0 }}
+            isPaused={false}
+            onAIAnalyze={() => {}}
+            onPauseResume={() => {}}
+            onStop={() => {}}
+          />
+          <EmptyState type="search" query={searchFilters.query} />
+        </div>
+      );
+    }
+
+    if (selectedCategory !== 'all') {
+      return (
+        <div className="space-y-4">
+          <ControlBar
+            filteredCount={0}
+            totalCount={repositories.length}
+            unanalyzedCount={0}
+            analyzedCount={0}
+            failedCount={0}
+            isAnalyzing={false}
+            analysisProgress={{ current: 0, total: 0 }}
+            isPaused={false}
+            onAIAnalyze={() => {}}
+            onPauseResume={() => {}}
+            onStop={() => {}}
+          />
+          <EmptyState type="category" categoryName={selectedCategoryObj?.name} />
+        </div>
+      );
+    }
+
+    return <EmptyState type="default" />;
+  }
+
+  if (error) {
     return (
-      <div className="text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400 mb-4">
-          {searchFilters.query ? (
-            language === 'zh' 
-              ? `未找到与"${searchFilters.query}"相关的仓库。`
-              : `No repositories found for "${searchFilters.query}".`
-          ) : selectedCategory === 'all' 
-            ? (language === 'zh' ? '未找到仓库。点击同步加载您的星标仓库。' : 'No repositories found. Click sync to load your starred repositories.')
-            : (language === 'zh' 
-                ? `在"${categoryName}"分类中未找到仓库。`
-                : `No repositories found in "${categoryName}" category.`
-              )
-          }
-        </p>
-        {searchFilters.query && (
-          <div className="text-sm text-gray-400 dark:text-gray-500">
-            <p className="mb-2">
-              {language === 'zh' ? '搜索建议：' : 'Search suggestions:'}
-            </p>
-            <ul className="space-y-1">
-              <li>• {language === 'zh' ? '尝试使用不同的关键词' : 'Try different keywords'}</li>
-              <li>• {language === 'zh' ? '使用AI搜索进行语义匹配' : 'Use AI search for semantic matching'}</li>
-              <li>• {language === 'zh' ? '检查拼写或尝试英文/中文关键词' : 'Check spelling or try English/Chinese keywords'}</li>
-            </ul>
-          </div>
-        )}
-      </div>
+      <ErrorState
+        message={error}
+        onRetry={() => setError(null)}
+      />
     );
   }
 
-  const unanalyzedCount = filteredRepositories.filter(r => !r.analyzed_at).length;
-  const analyzedCount = filteredRepositories.filter(r => r.analyzed_at && !r.analysis_failed).length;
-  const failedCount = filteredRepositories.filter(r => r.analysis_failed).length;
-
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
-
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 h-full">
+      {/* Control Bar */}
+      <ControlBar
+        filteredCount={filteredRepositories.length}
+        totalCount={repositories.length}
+        unanalyzedCount={unanalyzedCount}
+        analyzedCount={analyzedCount}
+        failedCount={failedCount}
+        isAnalyzing={isAnalyzing}
+        analysisProgress={analysisProgress}
+        isPaused={isPaused}
+        onAIAnalyze={handleAIAnalyze}
+        onPauseResume={handlePauseResume}
+        onStop={handleStop}
+      />
 
-
-      {/* AI Analysis Controls */}
-      <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center space-x-4">
-          {/* AI Analysis Dropdown Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowDropdown(!showDropdown)}
-              disabled={isLoading}
-              className="flex items-center space-x-2 px-4 py-2 bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-800 transition-colors disabled:opacity-50"
-            >
-              <Bot className="w-4 h-4" />
-              <span>
-                {isLoading 
-                  ? t(`AI分析中... (${analysisProgress.current}/${analysisProgress.total})`, `AI Analyzing... (${analysisProgress.current}/${analysisProgress.total})`)
-                  : t('AI分析', 'AI Analysis')
-                }
-              </span>
-              <ChevronDown className="w-4 h-4" />
-            </button>
-
-            {/* Dropdown Menu */}
-            {showDropdown && !isLoading && (
-              <div className="absolute top-full left-0 mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10">
-                <button
-                  onClick={() => handleAIAnalyze(false)}
-                  className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-600"
-                >
-                  <div className="font-medium text-gray-900 dark:text-white">
-                    {t('分析全部', 'Analyze All')}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {t(`分析 ${filteredRepositories.length} 个仓库`, `Analyze ${filteredRepositories.length} repositories`)}
-                  </div>
-                </button>
-                <button
-                  onClick={() => handleAIAnalyze(true)}
-                  disabled={unanalyzedCount === 0}
-                  className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed border-b border-gray-100 dark:border-gray-600"
-                >
-                  <div className="font-medium text-gray-900 dark:text-white">
-                    {t('分析未分析的', 'Analyze Unanalyzed')}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {t(`分析 ${unanalyzedCount} 个未分析仓库`, `Analyze ${unanalyzedCount} unanalyzed repositories`)}
-                  </div>
-                </button>
-                <button
-                  onClick={() => handleAIAnalyze(false, true)}
-                  disabled={failedCount === 0}
-                  className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="font-medium text-gray-900 dark:text-white">
-                    {t('重新分析失败的', 'Re-analyze Failed')}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {t(`重新分析 ${failedCount} 个失败仓库`, `Re-analyze ${failedCount} failed repositories`)}
-                  </div>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Progress Bar and Controls */}
-          {isLoading && analysisProgress.total > 0 && (
-            <div className="flex items-center space-x-3">
-              <div className="w-32 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                <div 
-                  className="bg-purple-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${(analysisProgress.current / analysisProgress.total) * 100}%` }}
-                ></div>
-              </div>
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                {Math.round((analysisProgress.current / analysisProgress.total) * 100)}%
-              </span>
-              <button
-                onClick={handlePauseResume}
-                className="p-1.5 rounded-lg bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300 hover:bg-yellow-200 dark:hover:bg-yellow-800 transition-colors"
-                title={isPaused ? t('继续', 'Resume') : t('暂停', 'Pause')}
-              >
-                {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={handleStop}
-                className="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800 transition-colors text-sm"
-              >
-                {t('停止', 'Stop')}
-              </button>
-            </div>
-          )}
-
-          {/* Description Toggle - Radio Style */}
-          {!isLoading && (
-            <div className="flex items-center space-x-3">
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                {t('显示内容:', 'Display:')}
-              </span>
-              <div className="flex items-center space-x-4">
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="displayContent"
-                    checked={showAISummary}
-                    onChange={() => setShowAISummary(true)}
-                    className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                  />
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {t('AI总结', 'AI Summary')}
-                  </span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="displayContent"
-                    checked={!showAISummary}
-                    onChange={() => setShowAISummary(false)}
-                    className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                  />
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {t('原始描述', 'Original Description')}
-                  </span>
-                </label>
-              </div>
-            </div>
-          )}
+      {/* Repository Grid - Virtualized */}
+      {isLoading && filteredRepositories.length === 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <RepositoryCardSkeleton key={i} />
+          ))}
         </div>
+      ) : (
+        <div
+          ref={parentRef}
+          className="flex-1 overflow-auto min-h-0 pr-3"
+          style={{ willChange: 'scroll-position' }}
+        >
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const rowIndex = virtualRow.index;
+              const startIndex = rowIndex * columnCount;
+              const rowRepos = filteredRepositories.slice(startIndex, startIndex + columnCount);
 
-        {/* Statistics */}
-        <div className={disableCardAnimations ? 'repository-list-syncing' : undefined}>
-          <div className="text-sm text-gray-500 dark:text-gray-400">
-            <div className="flex items-center justify-between">
-              <div>
-                {t(
-                  `第 ${startIndex}-${endIndex} / 共 ${filteredRepositories.length} 个仓库`,
-                  `Showing ${startIndex}-${endIndex} of ${filteredRepositories.length} repositories`
-                )}
-                {repositories.length !== filteredRepositories.length && (
-                  <span className="ml-2 text-blue-600 dark:text-blue-400">
-                    {t(`(从 ${repositories.length} 个中筛选)`, `(filtered from ${repositories.length})`)}
-                  </span>
-                )}
-              </div>
-              <div>
-                {analyzedCount > 0 && (
-                  <span className="mr-3">
-                    • {analyzedCount} {t('个已AI分析', 'AI analyzed')}
-                  </span>
-                )}
-                {failedCount > 0 && (
-                  <span className="mr-3">
-                    • {failedCount} {t('个分析失败', 'analysis failed')}
-                  </span>
-                )}
-                {unanalyzedCount > 0 && (
-                  <span>
-                    • {unanalyzedCount} {t('个未分析', 'unanalyzed')}
-                  </span>
-                )}
-              </div>
-            </div>
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
+                    contain: 'layout style paint',
+                    contentVisibility: 'auto',
+                  }}
+                  className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4"
+                >
+                  {rowRepos.map((repo) => (
+                    <div key={repo.id} style={{ height: CARD_HEIGHT }}>
+                      <RepositoryCard
+                        repository={repo}
+                        showAISummary={showAISummary}
+                        searchQuery={debouncedSearchQuery}
+                      />
+                    </div>
+                  ))}
+                  {/* Fill empty slots in the last row to maintain grid alignment */}
+                  {rowRepos.length < columnCount &&
+                    Array.from({ length: columnCount - rowRepos.length }).map((_, i) => (
+                      <div key={`empty-${i}`} style={{ height: CARD_HEIGHT }} />
+                    ))}
+                </div>
+              );
+            })}
           </div>
         </div>
-      </div>
-
-      {/* Repository Grid with consistent card widths */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {visibleRepositories.map(repo => (
-          <RepositoryCard 
-            key={repo.id}
-            repository={repo} 
-            showAISummary={showAISummary}
-            searchQuery={useAppStore.getState().searchFilters.query}
-          />
-        ))}
-      </div>
-
-      {/* Sentinel for on-demand loading */}
-      {visibleCount < filteredRepositories.length && (
-        <div ref={sentinelRef} className="h-8" />
       )}
     </div>
   );
 };
+
+export default RepositoryList;

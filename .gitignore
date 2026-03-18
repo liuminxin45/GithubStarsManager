@@ -29,8 +29,19 @@ electron
 
 # Backend server data
 server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
 server/data/.encryption-key
 server/dist/
 
- # Orchestrator internal files
+# Orchestrator internal files
 .sisyphus/
+
+# Development tooling directories
+.claude/
+.specify/
+specs/
+design-system/
+
+# Utility scripts (keep if needed, ignore if local only)
+# scripts/kill-ports.js

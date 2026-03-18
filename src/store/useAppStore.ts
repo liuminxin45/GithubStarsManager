@@ -50,6 +50,7 @@ interface AppActions {
   // Search actions
   setSearchFilters: (filters: Partial<SearchFilters>) => void;
   setSearchResults: (results: Repository[]) => void;
+  setIsSemanticSearch: (isSemantic: boolean) => void;
   
   // Release actions
   setReleases: (releases: Release[]) => void;
@@ -90,6 +91,7 @@ const initialSearchFilters: SearchFilters = {
   tags: [],
   languages: [],
   platforms: [],
+  categories: [],
   sortBy: 'stars',
   sortOrder: 'desc',
   isAnalyzed: undefined,
@@ -257,7 +259,8 @@ const defaultCategories: Category[] = [
 
 export const useAppStore = create<AppState & AppActions>()(
   persist(
-    (set, get) => ({
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    (set, _get) => ({
       // Initial state
       user: null,
       githubToken: null,
@@ -272,6 +275,7 @@ export const useAppStore = create<AppState & AppActions>()(
       lastBackup: null,
       searchFilters: initialSearchFilters,
       searchResults: [],
+      isSemanticSearch: false,
       releases: [],
       releaseSubscriptions: new Set<number>(),
       readReleases: new Set<number>(),
@@ -374,6 +378,7 @@ export const useAppStore = create<AppState & AppActions>()(
         searchFilters: { ...state.searchFilters, ...filters }
       })),
       setSearchResults: (searchResults) => set({ searchResults }),
+      setIsSemanticSearch: (isSemanticSearch) => set({ isSemanticSearch }),
 
       // Release actions
       setReleases: (releases) => set({ releases }),

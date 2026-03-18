@@ -1,8 +1,16 @@
+@import './styles/design-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer utilities {
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .line-clamp-3 {
     display: -webkit-box;
     -webkit-line-clamp: 3;
@@ -11,6 +19,7 @@
   }
 }
 
+/* Electron drag regions */
 .hd-drag {
   -webkit-app-region: drag;
   -webkit-user-select: none;
@@ -21,8 +30,79 @@
   -webkit-app-region: no-drag;
 }
 
+/* Prevent animation during sync */
 .repository-list-syncing .repository-card,
 .repository-list-syncing .repository-card * {
   animation: none !important;
   transition: none !important;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Better link styles */
+a {
+  text-decoration: none;
+}
+
+/* Form element reset */
+input, button, select, textarea {
+  font-family: inherit;
+}
+
+/* Code block styles */
+code {
+  font-family: var(--font-mono);
+}
+
+/* ================================
+   Virtual List Performance Optimizations
+   ================================ */
+
+/* Optimize scroll container */
+.virtual-list-container {
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Virtual list rows - GPU acceleration */
+[data-index] {
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 232px; /* CARD_HEIGHT + GAP_SIZE */
+}
+
+/* Repository cards - optimize paint */
+.repository-card {
+  contain: layout style;
+  transform: translateZ(0); /* Force GPU layer */
+}
+
+/* Lazy loaded images */
+img[loading="lazy"] {
+  content-visibility: auto;
+}
+
+/* Prevent layout shift during load */
+.repository-card img {
+  aspect-ratio: 1;
+}
+
+/* Optimize animations */
+@media (prefers-reduced-motion: no-preference) {
+  .virtual-list-container * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.15s !important;
+  }
+}
+
+/* Reduce motion for better performance */
+@media (prefers-reduced-motion: reduce) {
+  .virtual-list-container * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

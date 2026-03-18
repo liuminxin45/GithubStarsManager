@@ -95,12 +95,27 @@ export interface SearchFilters {
   tags: string[];
   languages: string[];
   platforms: string[]; // 新增：平台过滤
+  categories: string[]; // 新增：分类过滤
   sortBy: 'stars' | 'updated' | 'name' | 'starred';
   sortOrder: 'desc' | 'asc';
   minStars?: number;
   maxStars?: number;
   isAnalyzed?: boolean; // 新增：是否已AI分析
   isSubscribed?: boolean; // 新增：是否订阅Release
+}
+
+export interface FilterPreset {
+  id: string;
+  name: string;
+  filters: {
+    languages: string[];
+    platforms: string[];
+    tags: string[];
+    categories: string[];
+    minStars?: number;
+    maxStars?: number;
+  };
+  createdAt: number;
 }
 
 export interface Category {
@@ -140,6 +155,7 @@ export interface AppState {
   // Search
   searchFilters: SearchFilters;
   searchResults: Repository[];
+  isSemanticSearch: boolean; // 是否为AI语义搜索结果（跳过后续字符串匹配）
   
   // Releases
   releases: Release[];

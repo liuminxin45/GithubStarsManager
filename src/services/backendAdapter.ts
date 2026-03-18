@@ -186,14 +186,14 @@ class BackendAdapter {
 
   // === WebDAV Proxy ===
 
-  async proxyWebDAV(configId: string, method: string, path: string, body?: string, headers?: Record<string, string>): Promise<Response> {
+  async proxyWebDAV(configId: string, method: string, path: string, body?: string, headers?: Record<string, string>, timeoutMs = 120000): Promise<Response> {
     if (!this._backendUrl) throw new Error('Backend not available');
 
     return this.fetchWithTimeout(`${this._backendUrl}/proxy/webdav`, {
       method: 'POST',
       headers: this.getAuthHeaders(),
       body: JSON.stringify({ configId, method, path, body, headers })
-    });
+    }, timeoutMs);
   }
 
   // === Data Sync ===

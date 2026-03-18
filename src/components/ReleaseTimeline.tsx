@@ -1,22 +1,28 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { ExternalLink, GitBranch, Calendar, Package, Bell, BellOff, Search, X, RefreshCw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Eye, EyeOff, Download, ChevronDown } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import {
+  ExternalLink, GitBranch, Package, BellOff, Search, X, RefreshCw,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Eye, EyeOff, Download,
+  ChevronDown, Clock, Filter
+} from 'lucide-react';
 import { Release } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { GitHubApiService } from '../services/githubApi';
 import { forceSyncToBackend } from '../services/autoSync';
-import { formatDistanceToNow, format } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import { AssetFilterManager } from './AssetFilterManager';
+import { Card, Button, Badge } from '../design-system/components';
+import { Spinner, ProgressBar } from '../design-system/components/Spinner/Spinner';
+import { cn } from '../design-system/utils/cn';
 
 export const ReleaseTimeline: React.FC = () => {
-  const { 
-    releases, 
-    repositories, 
-    releaseSubscriptions, 
+  const {
+    releases,
+    repositories,
+    releaseSubscriptions,
     readReleases,
-    githubToken, 
+    githubToken,
     language,
     assetFilters,
-    setReleases,
     addReleases,
     markReleaseAsRead,
     toggleReleaseSubscription,
@@ -26,11 +32,15 @@ export const ReleaseTimeline: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshProgress, setRefreshProgress] = useState(0);
   const [lastRefreshTime, setLastRefreshTime] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(100);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
   const [viewMode, setViewMode] = useState<'compact' | 'detailed'>('compact');
   const [openDropdowns, setOpenDropdowns] = useState<Set<number>>(new Set());
+  const [showFilters, setShowFilters] = useState(false);
+
+  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -40,14 +50,10 @@ export const ReleaseTimeline: React.FC = () => {
         setOpenDropdowns(new Set());
       }
     };
-
     document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Format file size helper function
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -56,7 +62,6 @@ export const ReleaseTimeline: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  // Toggle dropdown for a specific release
   const toggleDropdown = (releaseId: number) => {
     setOpenDropdowns(prev => {
       const newSet = new Set(prev);
@@ -69,12 +74,9 @@ export const ReleaseTimeline: React.FC = () => {
     });
   };
 
-
-
-  const getDownloadLinks = (release: Release) => {
+  const getDownloadLinks = useCallback((release: Release) => {
     const links: Array<{ name: string; url: string; size: number; downloadCount: number }> = [];
-    
-    // Use GitHub release assets (this is the correct way to get downloads)
+
     if (release.assets && release.assets.length > 0) {
       release.assets.forEach(asset => {
         links.push({
@@ -86,16 +88,13 @@ export const ReleaseTimeline: React.FC = () => {
       });
     }
 
-    // Fallback: Extract download links from release body (for custom links)
-    const downloadRegex = /\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g;
+    const downloadRegex = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
     let match;
     while ((match = downloadRegex.exec(release.body)) !== null) {
       const [, name, url] = match;
-      // Only include actual download links (not documentation, etc.)
-      if (url.includes('/download/') || url.includes('/releases/') || 
+      if (url.includes('/download/') || url.includes('/releases/') ||
           name.toLowerCase().includes('download') ||
           /\.(exe|dmg|deb|rpm|apk|ipa|zip|tar\.gz|msi|pkg|appimage)$/i.test(url)) {
-        // Avoid duplicates with assets
         if (!links.some(link => link.url === url || link.name === name)) {
           links.push({ name, url, size: 0, downloadCount: 0 });
         }
@@ -103,39 +102,32 @@ export const ReleaseTimeline: React.FC = () => {
     }
 
     return links;
-  };
+  }, []);
 
-  // Filter releases for subscribed repositories
-  const subscribedReleases = releases.filter(release => 
+  const subscribedReleases = releases.filter(release =>
     releaseSubscriptions.has(release.repository.id)
   );
 
-  // Apply search and custom filters
   const filteredReleases = useMemo(() => {
     let filtered = subscribedReleases;
 
-    // Search filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(release => 
+      filtered = filtered.filter(release =>
         release.repository.name.toLowerCase().includes(query) ||
         release.repository.full_name.toLowerCase().includes(query) ||
         release.tag_name.toLowerCase().includes(query) ||
-        release.name.toLowerCase().includes(query) ||
-        release.body.toLowerCase().includes(query)
+        release.name.toLowerCase().includes(query)
       );
     }
 
-    // Custom asset filters
     if (selectedFilters.length > 0) {
       const activeFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-      
       filtered = filtered.filter(release => {
         const downloadLinks = getDownloadLinks(release);
-        
-        return downloadLinks.some(link => 
-          activeFilters.some(filter => 
-            filter.keywords.some(keyword => 
+        return downloadLinks.some(link =>
+          activeFilters.some(filter =>
+            filter.keywords.some(keyword =>
               link.name.toLowerCase().includes(keyword.toLowerCase())
             )
           )
@@ -143,80 +135,74 @@ export const ReleaseTimeline: React.FC = () => {
       });
     }
 
-    return filtered.sort((a, b) => 
+    return filtered.sort((a, b) =>
       new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
     );
-  }, [subscribedReleases, searchQuery, selectedFilters, assetFilters]);
+  }, [subscribedReleases, searchQuery, selectedFilters, assetFilters, getDownloadLinks]);
 
-  // Pagination
   const totalPages = Math.ceil(filteredReleases.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedReleases = filteredReleases.slice(startIndex, startIndex + itemsPerPage);
 
-  // Filter handlers
+  const activeFiltersCount = selectedFilters.length + (searchQuery ? 1 : 0);
+
   const handleFilterToggle = (filterId: string) => {
-    setSelectedFilters(prev => 
+    setSelectedFilters(prev =>
       prev.includes(filterId)
         ? prev.filter(id => id !== filterId)
         : [...prev, filterId]
     );
-    setCurrentPage(1); // Reset to first page when filtering
+    setCurrentPage(1);
   };
 
   const handleClearFilters = () => {
     setSelectedFilters([]);
+    setSearchQuery('');
     setCurrentPage(1);
   };
 
   const handleRefresh = async () => {
     if (!githubToken) {
-      alert(language === 'zh' ? 'GitHub token 未找到，请重新登录。' : 'GitHub token not found. Please login again.');
+      alert(t('GitHub token 未找到', 'GitHub token not found'));
       return;
     }
 
     setIsRefreshing(true);
+    setRefreshProgress(0);
+
     try {
       const githubApi = new GitHubApiService(githubToken);
       const subscribedRepos = repositories.filter(repo => releaseSubscriptions.has(repo.id));
-      
+
       if (subscribedRepos.length === 0) {
-        alert(language === 'zh' ? '没有订阅的仓库。' : 'No subscribed repositories.');
+        alert(t('没有订阅的仓库', 'No subscribed repositories'));
         return;
       }
 
-      let newReleasesCount = 0;
       const allNewReleases: Release[] = [];
-
-      // 获取最新的release时间戳
-      const latestReleaseTime = releases.length > 0 
+      const latestReleaseTime = releases.length > 0
         ? Math.max(...releases.map(r => new Date(r.published_at).getTime()))
         : 0;
       const sinceTimestamp = latestReleaseTime > 0 ? new Date(latestReleaseTime).toISOString() : undefined;
 
-      for (const repo of subscribedRepos) {
+      for (let i = 0; i < subscribedRepos.length; i++) {
+        const repo = subscribedRepos[i];
         const [owner, name] = repo.full_name.split('/');
-        
-        // 检查这个仓库是否是新订阅的（没有任何release记录）
         const hasExistingReleases = releases.some(r => r.repository.id === repo.id);
-        
+
         let repoReleases: Release[];
         if (!hasExistingReleases) {
-          // 新订阅的仓库，获取全部releases
           repoReleases = await githubApi.getRepositoryReleases(owner, name, 1, 10);
         } else {
-          // 已有记录的仓库，增量更新
           repoReleases = await githubApi.getIncrementalRepositoryReleases(owner, name, sinceTimestamp, 10);
         }
-        
-        // 设置repository信息
+
         repoReleases.forEach(release => {
           release.repository.id = repo.id;
         });
-        
+
         allNewReleases.push(...repoReleases);
-        newReleasesCount += repoReleases.length;
-        
-        // Rate limiting protection
+        setRefreshProgress(Math.round(((i + 1) / subscribedRepos.length) * 100));
         await new Promise(resolve => setTimeout(resolve, 200));
       }
 
@@ -224,34 +210,44 @@ export const ReleaseTimeline: React.FC = () => {
         addReleases(allNewReleases);
       }
 
-      const now = new Date().toISOString();
-      setLastRefreshTime(now);
-
-      const message = language === 'zh'
-        ? `刷新完成！发现 ${newReleasesCount} 个新Release。`
-        : `Refresh completed! Found ${newReleasesCount} new releases.`;
-      
-      alert(message);
+      setLastRefreshTime(new Date().toISOString());
+      alert(t(`发现 ${allNewReleases.length} 个新Release`, `Found ${allNewReleases.length} new releases`));
     } catch (error) {
       console.error('Refresh failed:', error);
-      const errorMessage = language === 'zh'
-        ? 'Release刷新失败，请检查网络连接。'
-        : 'Release refresh failed. Please check your network connection.';
-      alert(errorMessage);
+      alert(t('刷新失败', 'Refresh failed'));
     } finally {
       setIsRefreshing(false);
+      setRefreshProgress(0);
     }
   };
 
-  const clearAllFilters = () => {
-    setSearchQuery('');
-    setSelectedFilters([]);
-    setCurrentPage(1);
+  const handleReleaseClick = (releaseId: number) => {
+    markReleaseAsRead(releaseId);
   };
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(Math.max(1, Math.min(page, totalPages)));
+  const handleUnsubscribeRelease = async (repoId: number) => {
+    const repo = repositories.find(item => item.id === repoId);
+    if (!repo) return;
+
+    if (!confirm(t(`取消订阅 "${repo.full_name}"?`, `Unsubscribe from "${repo.full_name}"?`))) {
+      return;
+    }
+
+    const updatedRepo = { ...repo, subscribed_to_releases: false };
+    updateRepository(updatedRepo);
+    toggleReleaseSubscription(repo.id);
+
+    try {
+      await forceSyncToBackend();
+    } catch (error) {
+      console.error('Failed to unsubscribe:', error);
+      updateRepository({ ...repo, subscribed_to_releases: true });
+      toggleReleaseSubscription(repo.id);
+      alert(t('取消订阅失败', 'Failed to unsubscribe'));
+    }
   };
+
+  const isReleaseUnread = (releaseId: number) => !readReleases.has(releaseId);
 
   const getPageNumbers = () => {
     const delta = 2;
@@ -279,360 +275,380 @@ export const ReleaseTimeline: React.FC = () => {
     return rangeWithDots;
   };
 
-
-
-  const t = (zh: string, en: string) => language === 'zh' ? zh : en;
-
-  const truncateBody = (body: string, maxLength = 200) => {
-    if (body.length <= maxLength) return body;
-    return body.substring(0, maxLength) + '...';
-  };
-
-  const handleReleaseClick = (releaseId: number) => {
-    markReleaseAsRead(releaseId);
-  };
-
-  const handleUnsubscribeRelease = async (repoId: number) => {
-    const repo = repositories.find((item) => item.id === repoId);
-    if (!repo) {
-      alert(t('仓库信息不完整，无法取消订阅。', 'Repository information missing. Cannot unsubscribe.'));
-      return;
-    }
-
-    const confirmMessage = language === 'zh'
-      ? `确定取消订阅 "${repo.full_name}" 的 Release 吗？`
-      : `Unsubscribe from releases for "${repo.full_name}"?`;
-
-    if (!confirm(confirmMessage)) {
-      return;
-    }
-
-    const updatedRepo = { ...repo, subscribed_to_releases: false };
-    updateRepository(updatedRepo);
-    toggleReleaseSubscription(repo.id);
-
-    try {
-      await forceSyncToBackend();
-    } catch (error) {
-      console.error('Failed to unsubscribe release:', error);
-      updateRepository({ ...repo, subscribed_to_releases: true });
-      toggleReleaseSubscription(repo.id);
-      alert(t('取消订阅失败，请检查后端连接。', 'Failed to unsubscribe. Please check backend connection.'));
-      return;
-    }
-
-    alert(t('已取消订阅该仓库的 Release。', 'Unsubscribed from repository releases.'));
-  };
-
-  const isReleaseUnread = (releaseId: number) => {
-    return !readReleases.has(releaseId);
-  };
-
+  // Empty state
   if (subscribedReleases.length === 0) {
     const subscribedRepoCount = releaseSubscriptions.size;
-    
+
     return (
-      <div className="text-center py-12">
-        <Package className="w-16 h-16 text-gray-400 dark:text-gray-600 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-          {subscribedRepoCount === 0 ? t('没有Release订阅', 'No Release Subscriptions') : t('没有最近的Release', 'No Recent Releases')}
-        </h3>
-        <p className="text-gray-500 dark:text-gray-400 mb-6 max-w-md mx-auto">
-          {subscribedRepoCount === 0 
-            ? t('从仓库页面订阅仓库Release以在此查看更新。', 'Subscribe to repository releases from the Repositories tab to see updates here.')
-            : t(`您已订阅 ${subscribedRepoCount} 个仓库，但没有找到最近的Release。点击下方刷新按钮获取最新更新。`, `You're subscribed to ${subscribedRepoCount} repositories, but no recent releases were found. Click the refresh button below to get the latest updates.`)
-          }
-        </p>
-        
-        {/* 刷新按钮 - 在有订阅仓库时显示 */}
-        {subscribedRepoCount > 0 && (
-          <div className="mb-6">
-            <button
+      <div className="flex items-center justify-center py-16">
+        <Card padding="lg" className="max-w-md text-center">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-xl bg-surface-sunken flex items-center justify-center">
+            <Package className="w-7 h-7 text-text-tertiary" />
+          </div>
+          <h3 className="text-base font-semibold text-text-primary mb-1">
+            {subscribedRepoCount === 0 ? t('没有Release订阅', 'No Release Subscriptions') : t('没有最近的Release', 'No Recent Releases')}
+          </h3>
+          <p className="text-sm text-text-secondary mb-5">
+            {subscribedRepoCount === 0
+              ? t('从仓库页面订阅仓库Release以在此查看更新', 'Subscribe to repository releases from the Repositories tab')
+              : t(`已订阅 ${subscribedRepoCount} 个仓库，但没有找到最近的Release`, `Subscribed to ${subscribedRepoCount} repositories but no recent releases found`)
+            }
+          </p>
+          {subscribedRepoCount > 0 && (
+            <Button
+              variant="primary"
               onClick={handleRefresh}
               disabled={isRefreshing}
-              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mx-auto"
+              leftIcon={isRefreshing ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
             >
-              <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isRefreshing ? t('刷新中...', 'Refreshing...') : t('刷新Release', 'Refresh Releases')}</span>
-            </button>
-            {lastRefreshTime && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                {t('上次刷新:', 'Last refresh:')} {formatDistanceToNow(new Date(lastRefreshTime), { addSuffix: true })}
-              </p>
-            )}
-          </div>
-        )}
+              {isRefreshing ? t('刷新中...', 'Refreshing...') : t('刷新Release', 'Refresh Releases')}
+            </Button>
+          )}
+        </Card>
+      </div>
+    );
+  }
 
-        {subscribedRepoCount === 0 && (
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 max-w-md mx-auto">
-            <div className="flex items-center space-x-2 text-blue-700 dark:text-blue-300">
-              <Bell className="w-5 h-5" />
-              <span className="font-medium">{t('如何订阅:', 'How to subscribe:')}</span>
+  // Empty search results
+  if (filteredReleases.length === 0 && (searchQuery || selectedFilters.length > 0)) {
+    return (
+      <div className="space-y-4">
+        {/* Control Bar */}
+        <Card padding="md">
+          <div className="space-y-3">
+            {/* Search Row */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1 min-w-0">
+                <div className="relative">
+                  <div className="absolute left-0 top-0 bottom-0 w-9 flex items-center justify-center pointer-events-none">
+                    <Search className="w-4 h-4 text-text-tertiary" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder={t('搜索Release...', 'Search releases...')}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className={cn(
+                      'w-full h-9 pl-9 pr-9 bg-surface border border-border rounded-lg',
+                      'text-sm text-text-primary placeholder:text-text-tertiary',
+                      'focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500',
+                      'transition-colors'
+                    )}
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md hover:bg-surface-sunken text-text-tertiary transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                    showFilters || selectedFilters.length > 0
+                      ? 'bg-primary-50 text-primary-600 border border-primary-200'
+                      : 'bg-surface border border-border text-text-secondary hover:bg-surface-hover'
+                  )}
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{t('筛选', 'Filter')}</span>
+                  {selectedFilters.length > 0 && (
+                    <span className="bg-primary-600 text-white rounded-full min-w-[18px] h-[18px] flex items-center justify-center text-[10px] px-1">
+                      {selectedFilters.length}
+                    </span>
+                  )}
+                </button>
+
+                <Button
+                  variant="secondary"
+                  onClick={handleRefresh}
+                  disabled={isRefreshing}
+                  leftIcon={isRefreshing ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
+                >
+                  {isRefreshing ? t('刷新中...', 'Refreshing...') : t('刷新', 'Refresh')}
+                </Button>
+              </div>
             </div>
-            <p className="text-sm text-blue-600 dark:text-blue-400 mt-2">
-              {t('转到仓库页面，点击任何仓库卡片上的铃铛图标以订阅其Release。', 'Go to the Repositories tab and click the bell icon on any repository card to subscribe to its releases.')}
-            </p>
           </div>
-        )}
+        </Card>
+
+        {/* Empty State */}
+        <div className="flex items-center justify-center py-12">
+          <Card padding="lg" className="max-w-md text-center">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-xl bg-surface-sunken flex items-center justify-center">
+              <Search className="w-7 h-7 text-text-tertiary" />
+            </div>
+            <h3 className="text-base font-semibold text-text-primary mb-1">
+              {t('未找到相关Release', 'No releases found')}
+            </h3>
+            <p className="text-sm text-text-secondary mb-5">
+              {searchQuery
+                ? t(`未找到与 "${searchQuery}" 相关的Release。`, `No releases found for "${searchQuery}".`)
+                : t('尝试使用不同的关键词搜索。', 'Try different search keywords.')}
+            </p>
+            <Button variant="secondary" onClick={handleClearFilters}>
+              {t('清除筛选', 'Clear filters')}
+            </Button>
+          </Card>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="mb-6 sm:mb-8">
-        <div className="flex flex-col gap-4 mb-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-              {t('Release时间线', 'Release Timeline')}
-            </h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              {t(`来自您的 ${releaseSubscriptions.size} 个订阅仓库的最新Release`, `Latest releases from your ${releaseSubscriptions.size} subscribed repositories`)}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            {/* View Mode Toggle */}
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => setViewMode('compact')}
-                className={`p-2 rounded-lg transition-colors ${
-                  viewMode === 'compact'
-                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                    : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-                title={t('精简视图', 'Compact View')}
-              >
-                <EyeOff className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('detailed')}
-                className={`p-2 rounded-lg transition-colors ${
-                  viewMode === 'detailed'
-                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                    : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-                title={t('详细视图', 'Detailed View')}
-              >
-                <Eye className="w-4 h-4" />
-              </button>
+    <div className="flex flex-col gap-4 h-full">
+      {/* Control Bar - 与仓库页一致 */}
+      <Card padding="md">
+        <div className="space-y-3">
+          {/* Primary Control Row */}
+          <div className="flex flex-col sm:flex-row gap-2">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-0">
+              <div className="relative">
+                <div className="absolute left-0 top-0 bottom-0 w-9 flex items-center justify-center pointer-events-none">
+                  <Search className="w-4 h-4 text-text-tertiary" />
+                </div>
+                <input
+                  type="text"
+                  placeholder={t('搜索Release...', 'Search releases...')}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className={cn(
+                    'w-full h-9 pl-9 pr-9 bg-surface border border-border rounded-lg',
+                    'text-sm text-text-primary placeholder:text-text-tertiary',
+                    'focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500',
+                    'transition-colors'
+                  )}
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md hover:bg-surface-sunken text-text-tertiary transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Last Refresh Time */}
-            {lastRefreshTime && (
-              <span className="w-full text-sm text-gray-500 dark:text-gray-400 lg:w-auto">
-                {t('上次刷新:', 'Last refresh:')} {formatDistanceToNow(new Date(lastRefreshTime), { addSuffix: true })}
-              </span>
-            )}
-
-            {/* Refresh Button */}
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isRefreshing ? t('刷新中...', 'Refreshing...') : t('刷新', 'Refresh')}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Search and Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-6">
-          {/* Search Bar */}
-          <div className="relative mb-4">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder={t('搜索Release...', 'Search releases...')}
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            />
-            {searchQuery && (
+            {/* Control Buttons */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Filter Toggle */}
               <button
-                onClick={() => {
-                  setSearchQuery('');
-                  setCurrentPage(1);
-                }}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                onClick={() => setShowFilters(!showFilters)}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                  showFilters || selectedFilters.length > 0
+                    ? 'bg-primary-50 text-primary-600 border border-primary-200'
+                    : 'bg-surface border border-border text-text-secondary hover:bg-surface-hover'
+                )}
               >
-                <X className="w-4 h-4" />
+                <Filter className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{t('筛选', 'Filter')}</span>
+                {selectedFilters.length > 0 && (
+                  <span className="bg-primary-600 text-white rounded-full min-w-[18px] h-[18px] flex items-center justify-center text-[10px] px-1">
+                    {selectedFilters.length}
+                  </span>
+                )}
               </button>
-            )}
+
+              {/* View Mode Toggle */}
+              <div className="flex items-center gap-1 bg-surface-sunken rounded-lg p-1">
+                <button
+                  onClick={() => setViewMode('compact')}
+                  className={cn(
+                    'p-2 rounded-md transition-colors',
+                    viewMode === 'compact'
+                      ? 'bg-surface text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:text-text-primary'
+                  )}
+                  title={t('精简视图', 'Compact View')}
+                >
+                  <EyeOff className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setViewMode('detailed')}
+                  className={cn(
+                    'p-2 rounded-md transition-colors',
+                    viewMode === 'detailed'
+                      ? 'bg-surface text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:text-text-primary'
+                  )}
+                  title={t('详细视图', 'Detailed View')}
+                >
+                  <Eye className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Refresh Button */}
+              <Button
+                variant="secondary"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                leftIcon={isRefreshing ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
+              >
+                {isRefreshing ? t('刷新中...', 'Refreshing...') : t('刷新', 'Refresh')}
+              </Button>
+            </div>
           </div>
 
-          {/* Custom Asset Filters */}
-          <AssetFilterManager
-            selectedFilters={selectedFilters}
-            onFilterToggle={handleFilterToggle}
-            onClearFilters={handleClearFilters}
-          />
+          {/* Refresh Progress */}
+          {isRefreshing && (
+            <div className="flex items-center gap-4 pt-2 border-t border-border-subtle">
+              <Spinner size="sm" />
+              <span className="text-sm text-text-secondary">{t('正在获取最新Release...', 'Fetching latest releases...')}</span>
+              <div className="flex-1 max-w-xs">
+                <ProgressBar progress={refreshProgress} size="sm" />
+              </div>
+              <span className="text-sm text-text-secondary">{refreshProgress}%</span>
+            </div>
+          )}
 
-          {/* Clear All Filters */}
-          {(searchQuery || selectedFilters.length > 0) && (
-            <div className="flex justify-end pt-2 border-t border-gray-200 dark:border-gray-700">
+          {/* Active Filter Pills */}
+          {activeFiltersCount > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border-subtle">
+              {searchQuery && (
+                <Badge variant="neutral" size="sm" className="cursor-pointer hover:bg-surface-sunken" onClick={() => setSearchQuery('')}>
+                  {t('搜索:', 'Search:')} {searchQuery} ×
+                </Badge>
+              )}
+              {selectedFilters.map(filterId => {
+                const filter = assetFilters.find(f => f.id === filterId);
+                return filter ? (
+                  <Badge key={filterId} variant="primary" size="sm" className="cursor-pointer" onClick={() => handleFilterToggle(filterId)}>
+                    {filter.name} ×
+                  </Badge>
+                ) : null;
+              })}
               <button
-                onClick={clearAllFilters}
-                className="flex items-center space-x-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+                onClick={handleClearFilters}
+                className="text-xs text-text-tertiary hover:text-error transition-colors ml-1"
               >
-                <X className="w-4 h-4" />
-                <span>{t('清除所有筛选', 'Clear All Filters')}</span>
+                {t('清除全部', 'Clear all')}
               </button>
             </div>
           )}
-        </div>
 
-        {/* Results Info and Pagination Controls */}
-        <div className="flex flex-col gap-3 mb-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-            <span className="text-sm text-gray-600 dark:text-gray-400">
-              {t(
-                `显示 ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} 共 ${filteredReleases.length} 个Release`,
-                `Showing ${startIndex + 1}-${Math.min(startIndex + itemsPerPage, filteredReleases.length)} of ${filteredReleases.length} releases`
-              )}
-            </span>
-            {(searchQuery || selectedFilters.length > 0) && (
-              <span className="text-sm text-blue-600 dark:text-blue-400">
-                ({t('已筛选', 'filtered')})
+          {/* Filter Panel */}
+          {showFilters && (
+            <div className="pt-3 border-t border-border">
+              <AssetFilterManager
+                selectedFilters={selectedFilters}
+                onFilterToggle={handleFilterToggle}
+                onClearFilters={() => setSelectedFilters([])}
+              />
+            </div>
+          )}
+
+          {/* Results Summary Bar */}
+          <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-subtle">
+            <div className="flex items-center gap-3">
+              <span>
+                <span className="font-medium text-text-primary">{filteredReleases.length}</span>
+                {' / '}
+                {subscribedReleases.length} {t('个Release', 'releases')}
               </span>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-            {/* Items per page selector */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-600 dark:text-gray-400">{t('每页:', 'Per page:')}</span>
+              {lastRefreshTime && (
+                <span className="hidden sm:inline">
+                  {t('上次刷新:', 'Last refresh:')} {formatDistanceToNow(new Date(lastRefreshTime), { addSuffix: true })}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-text-secondary">{t('每页:', 'Per page:')}</span>
               <select
                 value={itemsPerPage}
                 onChange={(e) => {
                   setItemsPerPage(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                className="px-3 py-1.5 bg-surface border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-primary-500/20"
               >
+                <option value={25}>25</option>
                 <option value={50}>50</option>
                 <option value={100}>100</option>
-                <option value={200}>200</option>
-                <option value={500}>500</option>
               </select>
             </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center space-x-1 overflow-x-auto pb-1">
-                <button
-                  onClick={() => handlePageChange(1)}
-                  disabled={currentPage === 1}
-                  className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <ChevronsLeft className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                
-                {getPageNumbers().map((page, index) => (
-                  <button
-                    key={index}
-                    onClick={() => typeof page === 'number' ? handlePageChange(page) : undefined}
-                    disabled={typeof page !== 'number'}
-                    className={`px-3 py-2 rounded-lg text-sm ${
-                      page === currentPage
-                        ? 'bg-blue-600 text-white'
-                        : typeof page === 'number'
-                        ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                        : 'text-gray-400 cursor-default'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
-                
-                <button
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                  className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handlePageChange(totalPages)}
-                  disabled={currentPage === totalPages}
-                  className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <ChevronsRight className="w-4 h-4" />
-                </button>
-              </div>
-            )}
           </div>
         </div>
-      </div>
+      </Card>
 
-      {/* Releases List */}
-      <div className="space-y-4">
-        {paginatedReleases.map(release => {
+      {/* Releases List - 使用统一的滚动容器 */}
+      <div className="flex-1 overflow-auto min-h-0 pr-3 space-y-3">
+        {paginatedReleases.map((release) => {
           const downloadLinks = getDownloadLinks(release);
           const isUnread = isReleaseUnread(release.id);
-          
+          const isDropdownOpen = openDropdowns.has(release.id);
+
           return (
-            <div
+            <Card
               key={release.id}
-              className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-lg transition-shadow cursor-pointer"
+              isInteractive
               onClick={() => handleReleaseClick(release.id)}
+              className={cn(
+                'relative',
+                isUnread && 'border-l-4 border-l-primary-500'
+              )}
+              padding={viewMode === 'detailed' ? 'lg' : 'md'}
             >
+              {/* Unread Indicator Dot */}
+              {isUnread && (
+                <div className="absolute top-4 right-4">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-primary-500"></span>
+                  </span>
+                </div>
+              )}
+
               {viewMode === 'detailed' ? (
                 // Detailed View
-                <div className="p-6">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center space-x-3 flex-1 min-w-0">
-                      {/* Unread indicator */}
-                      {isUnread && (
-                        <div className="w-3 h-3 bg-blue-500 rounded-full flex-shrink-0"></div>
-                      )}
-                      <div className="flex items-center justify-center w-10 h-10 bg-green-100 dark:bg-green-900 rounded-lg flex-shrink-0">
-                        <GitBranch className="w-5 h-5 text-green-600 dark:text-green-400" />
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-success-100 flex items-center justify-center">
+                        <GitBranch className="w-5 h-5 text-success-600" />
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <h4 className="font-semibold text-gray-900 dark:text-white truncate">
-                          {release.repository.name} {release.tag_name}
+                      <div>
+                        <h4 className="font-semibold text-text-primary">
+                          {release.repository.name} <span className="text-primary-600">{release.tag_name}</span>
                         </h4>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
-                          {release.repository.full_name}
-                        </p>
+                        <p className="text-sm text-text-secondary">{release.repository.full_name}</p>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2 flex-shrink-0">
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-text-tertiary flex items-center gap-1">
+                        <Clock className="w-4 h-4" />
                         {formatDistanceToNow(new Date(release.published_at), { addSuffix: true })}
                       </span>
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="!px-2"
                         onClick={(e) => {
-                          e.stopPropagation();
+                          e?.stopPropagation();
                           handleUnsubscribeRelease(release.repository.id);
                         }}
-                        className="p-2 rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                        title={t('取消订阅 Release', 'Unsubscribe from releases')}
+                        title={t('取消订阅', 'Unsubscribe')}
                       >
                         <BellOff className="w-4 h-4" />
-                      </button>
+                      </Button>
                       <a
                         href={release.html_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-2 rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                        title={t('在GitHub上查看', 'View on GitHub')}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleReleaseClick(release.id);
                         }}
+                        className="p-2 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-sunken transition-colors"
+                        title={t('在GitHub上查看', 'View on GitHub')}
                       >
                         <ExternalLink className="w-4 h-4" />
                       </a>
@@ -640,112 +656,53 @@ export const ReleaseTimeline: React.FC = () => {
                   </div>
 
                   {release.name && release.name !== release.tag_name && (
-                    <h5 className="font-medium text-gray-800 dark:text-gray-200 mb-2">
-                      {release.name}
-                    </h5>
+                    <h5 className="font-medium text-text-primary">{release.name}</h5>
                   )}
 
-                  {/* Download Links - Dropdown */}
+                  {/* Download Links */}
                   {downloadLinks.length > 0 && (
-                    <div className="mb-4 relative download-dropdown">
-                      <div className="flex items-center justify-between mb-2">
-                        <h6 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          {(() => {
-                            // 计算过滤后的文件数量
-                            let filteredCount = downloadLinks.length;
-                            if (selectedFilters.length > 0) {
-                              const activeFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-                              const filteredLinks = downloadLinks.filter(link => 
-                                activeFilters.some(filter => 
-                                  filter.keywords.some(keyword => 
-                                    link.name.toLowerCase().includes(keyword.toLowerCase())
-                                  )
-                                )
-                              );
-                              filteredCount = filteredLinks.length;
-                            }
-                            
-                            return selectedFilters.length > 0 && filteredCount !== downloadLinks.length
-                              ? `${t('下载:', 'Downloads:')} (${filteredCount}/${downloadLinks.length})`
-                              : `${t('下载:', 'Downloads:')} (${downloadLinks.length})`;
-                          })()}
-                        </h6>
-                        <button
+                    <div className="download-dropdown relative">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-text-secondary">
+                          {t('下载:', 'Downloads:')} {downloadLinks.length} {t('个文件', 'files')}
+                        </span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={(e) => {
-                            e.stopPropagation();
+                            e?.stopPropagation();
                             toggleDropdown(release.id);
                           }}
-                          className="flex items-center space-x-1 px-3 py-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm"
+                          rightIcon={<ChevronDown className={cn('w-4 h-4 transition-transform', isDropdownOpen && 'rotate-180')} />}
                         >
-                          <Download className="w-4 h-4" />
-                          <span>{t('查看下载', 'View Downloads')}</span>
-                          <ChevronDown className={`w-4 h-4 transition-transform ${openDropdowns.has(release.id) ? 'rotate-180' : ''}`} />
-                        </button>
+                          {t('查看下载', 'View Downloads')}
+                        </Button>
                       </div>
-                      
-                      {openDropdowns.has(release.id) && (
-                        <div className="absolute z-10 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-80 overflow-y-auto">
-                          {(() => {
-                            // 如果有激活的过滤器，只显示匹配的文件
-                            let filteredLinks = downloadLinks;
-                            if (selectedFilters.length > 0) {
-                              const activeFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-                              filteredLinks = downloadLinks.filter(link => 
-                                activeFilters.some(filter => 
-                                  filter.keywords.some(keyword => 
-                                    link.name.toLowerCase().includes(keyword.toLowerCase())
-                                  )
-                                )
-                              );
-                            }
-                            
-                            return filteredLinks.length > 0 ? filteredLinks.map((link, index) => {
-                              const asset = release.assets.find(asset => asset.name === link.name);
-                              return (
-                                <a
-                                  key={index}
-                                  href={link.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-600 last:border-b-0 group"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleReleaseClick(release.id);
-                                    toggleDropdown(release.id);
-                                  }}
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                                      {link.name}
-                                    </div>
-                                    <div className="flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                      {link.size > 0 && (
-                                        <span>{formatFileSize(link.size)}</span>
-                                      )}
-                                      {asset?.updated_at && (
-                                        <span>
-                                          {formatDistanceToNow(new Date(asset.updated_at), { addSuffix: true })}
-                                        </span>
-                                      )}
-                                      {link.downloadCount > 0 && (
-                                        <span>{link.downloadCount.toLocaleString()} {t('次下载', 'downloads')}</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <Download className="w-4 h-4 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 flex-shrink-0" />
-                                </a>
-                              );
-                            }) : (
-                              <div className="px-4 py-6 text-center text-gray-500 dark:text-gray-400">
-                                <div className="text-sm">
-                                  {t('没有匹配过滤器的文件', 'No files match the selected filters')}
-                                </div>
-                                <div className="text-xs mt-1">
-                                  {t('尝试调整过滤器设置', 'Try adjusting your filter settings')}
+
+                      {isDropdownOpen && (
+                        <div className="absolute z-20 left-0 right-0 mt-2 bg-surface-elevated border border-border rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                          {downloadLinks.map((link, idx) => (
+                            <a
+                              key={idx}
+                              href={link.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-between px-4 py-3 hover:bg-surface-hover transition-colors border-b border-border-subtle last:border-b-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReleaseClick(release.id);
+                              }}
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-text-primary truncate">{link.name}</div>
+                                <div className="flex items-center gap-3 text-xs text-text-tertiary mt-1">
+                                  {link.size > 0 && <span>{formatFileSize(link.size)}</span>}
+                                  {link.downloadCount > 0 && <span>{link.downloadCount.toLocaleString()} {t('次下载', 'downloads')}</span>}
                                 </div>
                               </div>
-                            );
-                          })()}
+                              <Download className="w-4 h-4 text-text-tertiary" />
+                            </a>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -753,19 +710,16 @@ export const ReleaseTimeline: React.FC = () => {
 
                   {release.body && (
                     <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                        {truncateBody(release.body)}
-                      </div>
+                      <p className="text-text-secondary whitespace-pre-wrap line-clamp-3">
+                        {release.body}
+                      </p>
                       {release.body.length > 200 && (
                         <a
                           href={release.html_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-blue-600 dark:text-blue-400 hover:underline text-sm mt-2 inline-block"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleReleaseClick(release.id);
-                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-primary-600 hover:text-primary-700 text-sm mt-2 inline-block"
                         >
                           {t('阅读完整Release说明 →', 'Read full release notes →')}
                         </a>
@@ -774,238 +728,163 @@ export const ReleaseTimeline: React.FC = () => {
                   )}
                 </div>
               ) : (
-                // Compact View - Table-like layout
-                <div className="p-4">
-                  <div className="grid grid-cols-12 gap-4 items-center">
-                    {/* Repository and Version - 缩小列宽 */}
-                    <div className="col-span-3 min-w-0">
-                      <div className="flex items-center space-x-2">
-                        {/* Unread indicator */}
-                        {isUnread && (
-                          <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0"></div>
-                        )}
-                        <div className="w-6 h-6 bg-green-100 dark:bg-green-900 rounded flex items-center justify-center flex-shrink-0">
-                          <GitBranch className="w-3 h-3 text-green-600 dark:text-green-400" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                            {release.repository.name}
-                          </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                            {release.tag_name}
-                          </p>
-                        </div>
-                      </div>
+                // Compact View
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-success-100 flex items-center justify-center flex-shrink-0">
+                      <GitBranch className="w-4 h-4 text-success-600" />
                     </div>
-
-                    {/* Release Name */}
-                    <div className="col-span-3 min-w-0">
-                      <p className="text-sm text-gray-900 dark:text-white truncate" title={release.name || release.tag_name}>
-                        {release.name || release.tag_name}
+                    <div className="min-w-0">
+                      <p className="font-medium text-text-primary text-sm truncate">
+                        {release.repository.name} <span className="text-primary-600">{release.tag_name}</span>
                       </p>
+                      <p className="text-xs text-text-secondary truncate">{release.name || release.tag_name}</p>
                     </div>
+                  </div>
 
-                    {/* Download Links - Dropdown */}
-                    <div className="col-span-4 min-w-0 relative download-dropdown">
-                      {downloadLinks.length > 0 ? (
-                        <div className="relative">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleDropdown(release.id);
-                            }}
-                            className="flex items-center space-x-2 px-3 py-1.5 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm w-full justify-between"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <Download className="w-4 h-4" />
-                              <span>
-                                {(() => {
-                                  // 计算过滤后的文件数量
-                                  let filteredCount = downloadLinks.length;
-                                  if (selectedFilters.length > 0) {
-                                    const activeFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-                                    const filteredLinks = downloadLinks.filter(link => 
-                                      activeFilters.some(filter => 
-                                        filter.keywords.some(keyword => 
-                                          link.name.toLowerCase().includes(keyword.toLowerCase())
-                                        )
-                                      )
-                                    );
-                                    filteredCount = filteredLinks.length;
-                                  }
-                                  
-                                  return selectedFilters.length > 0 && filteredCount !== downloadLinks.length
-                                    ? `${filteredCount}/${downloadLinks.length} ${t('个文件', 'files')}`
-                                    : `${downloadLinks.length} ${t('个文件', 'files')}`;
-                                })()}
-                              </span>
-                            </div>
-                            <ChevronDown className={`w-4 h-4 transition-transform ${openDropdowns.has(release.id) ? 'rotate-180' : ''}`} />
-                          </button>
-                          
-                          {openDropdowns.has(release.id) && (
-                            <div className="absolute z-20 left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-64 overflow-y-auto">
-                              {(() => {
-                                // 如果有激活的过滤器，只显示匹配的文件
-                                let filteredLinks = downloadLinks;
-                                if (selectedFilters.length > 0) {
-                                  const activeFilters = assetFilters.filter(filter => selectedFilters.includes(filter.id));
-                                  filteredLinks = downloadLinks.filter(link => 
-                                    activeFilters.some(filter => 
-                                      filter.keywords.some(keyword => 
-                                        link.name.toLowerCase().includes(keyword.toLowerCase())
-                                      )
-                                    )
-                                  );
-                                }
-                                
-                                return filteredLinks.length > 0 ? filteredLinks.map((link, index) => {
-                                  const asset = release.assets.find(asset => asset.name === link.name);
-                                  return (
-                                    <a
-                                      key={index}
-                                      href={link.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-600 last:border-b-0 group"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleReleaseClick(release.id);
-                                        toggleDropdown(release.id);
-                                      }}
-                                    >
-                                      <div className="min-w-0 flex-1">
-                                        <div className="text-xs font-medium text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                                          {link.name}
-                                        </div>
-                                        <div className="flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                          {link.size > 0 && (
-                                            <span>{formatFileSize(link.size)}</span>
-                                          )}
-                                          {asset?.updated_at && (
-                                            <span>
-                                              {formatDistanceToNow(new Date(asset.updated_at), { addSuffix: true })}
-                                            </span>
-                                          )}
-                                          {link.downloadCount > 0 && (
-                                            <span>{link.downloadCount.toLocaleString()} {t('次下载', 'downloads')}</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                      <Download className="w-3 h-3 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 flex-shrink-0" />
-                                    </a>
-                                  );
-                                }) : (
-                                  <div className="px-3 py-4 text-center text-gray-500 dark:text-gray-400">
-                                    <div className="text-xs">
-                                      {t('没有匹配过滤器的文件', 'No files match the selected filters')}
-                                    </div>
-                                    <div className="text-xs mt-1 opacity-75">
-                                      {t('尝试调整过滤器设置', 'Try adjusting your filter settings')}
-                                    </div>
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-gray-400 dark:text-gray-500">
-                          {t('无下载', 'No downloads')}
-                        </span>
-                      )}
-                    </div>
+                  {/* Downloads */}
+                  <div className="hidden sm:block download-dropdown relative">
+                    {downloadLinks.length > 0 ? (
+                      <div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e?.stopPropagation();
+                            toggleDropdown(release.id);
+                          }}
+                          leftIcon={<Download className="w-4 h-4" />}
+                          rightIcon={<ChevronDown className={cn('w-4 h-4 transition-transform', isDropdownOpen && 'rotate-180')} />}
+                        >
+                          {downloadLinks.length}
+                        </Button>
 
-                    {/* Time and Actions */}
-                    <div className="col-span-2 flex items-center justify-end space-x-2">
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        {formatDistanceToNow(new Date(release.published_at), { addSuffix: true })}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleUnsubscribeRelease(release.repository.id);
-                        }}
-                        className="p-1.5 rounded bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                        title={t('取消订阅 Release', 'Unsubscribe from releases')}
-                      >
-                        <BellOff className="w-3 h-3" />
-                      </button>
-                      <a
-                        href={release.html_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 rounded bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                        title={t('在GitHub上查看', 'View on GitHub')}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleReleaseClick(release.id);
-                        }}
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
+                        {isDropdownOpen && (
+                          <div className="absolute right-0 mt-2 w-64 bg-surface-elevated border border-border rounded-lg shadow-lg max-h-48 overflow-y-auto z-20">
+                            {downloadLinks.slice(0, 5).map((link, idx) => (
+                              <a
+                                key={idx}
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center justify-between px-3 py-2 hover:bg-surface-hover transition-colors border-b border-border-subtle last:border-b-0"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleReleaseClick(release.id);
+                                }}
+                              >
+                                <span className="text-xs text-text-primary truncate">{link.name}</span>
+                                <Download className="w-3 h-3 text-text-tertiary" />
+                              </a>
+                            ))}
+                            {downloadLinks.length > 5 && (
+                              <div className="px-3 py-2 text-xs text-text-tertiary text-center">
+                                +{downloadLinks.length - 5} {t('更多', 'more')}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-text-tertiary">{t('无下载', 'No downloads')}</span>
+                    )}
+                  </div>
+
+                  {/* Time and Actions */}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-xs text-text-tertiary hidden sm:block">
+                      {formatDistanceToNow(new Date(release.published_at), { addSuffix: true })}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="!px-2"
+                      onClick={(e) => {
+                        e?.stopPropagation();
+                        handleUnsubscribeRelease(release.repository.id);
+                      }}
+                      title={t('取消订阅', 'Unsubscribe')}
+                    >
+                      <BellOff className="w-4 h-4" />
+                    </Button>
+                    <a
+                      href={release.html_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleReleaseClick(release.id);
+                      }}
+                      className="p-2 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-surface-sunken transition-colors"
+                      title={t('在GitHub上查看', 'View on GitHub')}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
                   </div>
                 </div>
               )}
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      {/* Bottom Pagination */}
+      {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-center mt-8">
-          <div className="flex items-center space-x-1">
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage === 1}
-              className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+        <div className="flex items-center justify-center gap-1 pt-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCurrentPage(1)}
+            disabled={currentPage === 1}
+            className="!px-2"
+          >
+            <ChevronsLeft className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCurrentPage(p => p - 1)}
+            disabled={currentPage === 1}
+            className="!px-2"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+
+          {getPageNumbers().map((page, index) => (
+            <Button
+              key={index}
+              variant={page === currentPage ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => typeof page === 'number' && setCurrentPage(page)}
+              disabled={typeof page !== 'number'}
+              className="min-w-[40px]"
             >
-              <ChevronsLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            
-            {getPageNumbers().map((page, index) => (
-              <button
-                key={index}
-                onClick={() => typeof page === 'number' ? handlePageChange(page) : undefined}
-                disabled={typeof page !== 'number'}
-                className={`px-3 py-2 rounded-lg text-sm ${
-                  page === currentPage
-                    ? 'bg-blue-600 text-white'
-                    : typeof page === 'number'
-                    ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                    : 'text-gray-400 cursor-default'
-                }`}
-              >
-                {page}
-              </button>
-            ))}
-            
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage === totalPages}
-              className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage === totalPages}
-              className="p-2 rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronsRight className="w-4 h-4" />
-            </button>
-          </div>
+              {page}
+            </Button>
+          ))}
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCurrentPage(p => p + 1)}
+            disabled={currentPage === totalPages}
+            className="!px-2"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCurrentPage(totalPages)}
+            disabled={currentPage === totalPages}
+            className="!px-2"
+          >
+            <ChevronsRight className="w-4 h-4" />
+          </Button>
         </div>
       )}
     </div>
   );
 };
+
+export default ReleaseTimeline;
