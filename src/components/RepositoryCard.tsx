@@ -1,20 +1,95 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Star, GitFork, Eye, ExternalLink, Calendar, Tag, Bell, BellOff, Bot, Monitor, Smartphone, Globe, Terminal, Package, Edit3, BookOpen, Apple, Zap } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Star, ExternalLink, Calendar, Tag, Bell, BellOff, Bot,
+  MoreHorizontal, Trash2, Edit3, BookOpen, CheckCircle2, AlertCircle
+} from 'lucide-react';
 import { Repository } from '../types';
-import { useAppStore, getAllCategories } from '../store/useAppStore';
+import { useAppStore } from '../store/useAppStore';
 import { GitHubApiService } from '../services/githubApi';
 import { AIService } from '../services/aiService';
 import { forceSyncToBackend } from '../services/autoSync';
 import { formatDistanceToNow } from 'date-fns';
 import { RepositoryEditModal } from './RepositoryEditModal';
+import { cn } from '../design-system/utils/cn';
 
 interface RepositoryCardProps {
   repository: Repository;
   showAISummary?: boolean;
-  searchQuery?: string; // 新增：用于高亮搜索关键词
+  searchQuery?: string;
 }
 
-export const RepositoryCard: React.FC<RepositoryCardProps> = ({
+// 全局事件委托 - 点击外部关闭菜单
+const menuListeners = new Map<string, () => void>();
+
+// 语言颜色映射 - 静态数据移到组件外
+const LANGUAGE_COLORS: Record<string, string> = {
+  JavaScript: '#f1e05a',
+  TypeScript: '#3178c6',
+  Python: '#3572A5',
+  Java: '#b07219',
+  'C++': '#f34b7d',
+  C: '#555555',
+  'C#': '#239120',
+  Go: '#00ADD8',
+  Rust: '#dea584',
+  PHP: '#4F5D95',
+  Ruby: '#701516',
+  Swift: '#fa7343',
+  Kotlin: '#A97BFF',
+  Dart: '#00B4AB',
+  Shell: '#89e051',
+  HTML: '#e34c26',
+  CSS: '#1572B6',
+  Vue: '#4FC08D',
+  React: '#61DAFB',
+};
+
+const getLanguageColor = (language: string | null): string =>
+  LANGUAGE_COLORS[language || ''] || '#737373';
+
+document.addEventListener('mousedown', (event) => {
+  const target = event.target as HTMLElement;
+  const isMenuButton = target.closest('[data-menu-button]');
+  const isMenu = target.closest('[data-menu]');
+
+  if (!isMenuButton && !isMenu) {
+    menuListeners.forEach((close) => close());
+  }
+});
+
+// 使用 ResizeObserver 优化尺寸检测
+const useResizeObserver = (
+  ref: React.RefObject<HTMLParagraphElement | null>,
+  callback: () => void,
+  deps: unknown[]
+) => {
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    callback();
+
+    const observer = new ResizeObserver(() => {
+      callback();
+    });
+    observer.observe(element);
+
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+};
+
+/**
+ * RepositoryCard - 精简版仓库卡片
+ *
+ * 设计原则：
+ * - 降低信息密度，突出关键信息
+ * - 清晰的视觉层级
+ * - 克制的交互反馈
+ * - 简洁的图标使用
+ */
+const RepositoryCardInner: React.FC<RepositoryCardProps> = ({
   repository,
   showAISummary = true,
   searchQuery = ''
@@ -37,124 +112,75 @@ export const RepositoryCard: React.FC<RepositoryCardProps> = ({
   const [showTooltip, setShowTooltip] = useState(false);
   const [isTextTruncated, setIsTextTruncated] = useState(false);
   const [unstarring, setUnstarring] = useState(false);
-
-  const descriptionRef = useRef<HTMLParagraphElement>(null);
+  const [showActions, setShowActions] = useState(false);
 
   const isSubscribed = releaseSubscriptions.has(repository.id);
 
-  // 高亮搜索关键词的工具函数
-  const highlightSearchTerm = (text: string, searchTerm: string) => {
-    if (!searchTerm.trim() || !text) return text;
+  // 使用 ResizeObserver 检测文本截断
+  const descriptionRef = useRef<HTMLParagraphElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
-    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    const parts = text.split(regex);
+  const checkTruncation = useCallback(() => {
+    setIsTextTruncated(descriptionRef.current?.scrollHeight > descriptionRef.current?.clientHeight);
+  }, []);
 
-    return parts.map((part, index) => {
-      if (regex.test(part)) {
-        return (
-          <mark
-            key={index}
-            className="bg-yellow-200 dark:bg-yellow-800 text-yellow-900 dark:text-yellow-100 px-1 rounded"
-          >
-            {part}
-          </mark>
-        );
-      }
-      return part;
-    });
-  };
+  useResizeObserver(descriptionRef, checkTruncation, [repository, showAISummary]);
 
-  // Check if text is actually truncated by comparing scroll height with client height
+  // 注册到全局事件委托
   useEffect(() => {
-    const checkTruncation = () => {
-      if (descriptionRef.current) {
-        const element = descriptionRef.current;
-        const isTruncated = element.scrollHeight > element.clientHeight;
-        setIsTextTruncated(isTruncated);
-      }
-    };
-
-    // Check truncation after component mounts and when content changes
-    checkTruncation();
-
-    // Also check on window resize
-    window.addEventListener('resize', checkTruncation);
-    return () => window.removeEventListener('resize', checkTruncation);
-  }, [repository, showAISummary]);
-
-  const formatNumber = (num: number) => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
-  };
-
-  const getLanguageColor = (language: string | null) => {
-    const colors = {
-      JavaScript: '#f1e05a',
-      TypeScript: '#3178c6',
-      Python: '#3572A5',
-      Java: '#b07219',
-      'C++': '#f34b7d',
-      C: '#555555',
-      'C#': '#239120',
-      Go: '#00ADD8',
-      Rust: '#dea584',
-      PHP: '#4F5D95',
-      Ruby: '#701516',
-      Swift: '#fa7343',
-      Kotlin: '#A97BFF',
-      Dart: '#00B4AB',
-      Shell: '#89e051',
-      HTML: '#e34c26',
-      CSS: '#1572B6',
-      Vue: '#4FC08D',
-      React: '#61DAFB',
-    };
-    return colors[language as keyof typeof colors] || '#6b7280';
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    const platformLower = platform.toLowerCase();
-
-    switch (platformLower) {
-      case 'mac':
-      case 'macos':
-      case 'ios':
-        return Apple;
-      case 'windows':
-      case 'win':
-        return Monitor; // 使用 Monitor 代表 Windows
-      case 'linux':
-        return Terminal; // 使用 Terminal 代表 Linux
-      case 'android':
-        return Smartphone;
-      case 'web':
-        return Globe;
-      case 'cli':
-        return Terminal;
-      case 'docker':
-        return Package;
-      default:
-        return Monitor; // 默认使用 Monitor
+    if (showActions) {
+      menuListeners.set(repository.id, () => setShowActions(false));
+      return () => {
+        menuListeners.delete(repository.id);
+      };
     }
-  };
+  }, [showActions, repository.id]);
 
-  const getPlatformDisplayName = (platform: string) => {
-    const platformLower = platform.toLowerCase();
-    const nameMap: Record<string, string> = {
-      mac: 'macOS',
-      macos: 'macOS',
-      windows: 'Windows',
-      win: 'Windows',
-      linux: 'Linux',
-      ios: 'iOS',
-      android: 'Android',
-      web: 'Web',
-      cli: 'CLI',
-      docker: 'Docker',
+  // 缓存高亮搜索词结果
+  const highlightSearchTerm = useMemo(() => {
+    const cache = new Map<string, React.ReactNode>();
+
+    return (text: string, searchTerm: string): React.ReactNode => {
+      if (!searchTerm.trim() || !text) return text;
+
+      const cacheKey = `${text}::${searchTerm}`;
+      if (cache.has(cacheKey)) return cache.get(cacheKey)!;
+
+      const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      const parts = text.split(regex);
+
+      const result = parts.map((part, index) => {
+        if (regex.test(part)) {
+          return (
+            <mark
+              key={index}
+              className="bg-primary-100 text-primary-800 px-0.5 rounded"
+            >
+              {part}
+            </mark>
+          );
+        }
+        return part;
+      });
+
+      cache.set(cacheKey, result);
+      return result;
     };
-    return nameMap[platformLower] || platform;
-  };
+  }, []);
+
+  // 缓存数字格式化
+  const formatNumber = useMemo(() => {
+    const cache = new Map<number, string>();
+    return (num: number): string => {
+      if (cache.has(num)) return cache.get(num)!;
+      let result: string;
+      if (num >= 1000000) result = `${(num / 1000000).toFixed(1)}M`;
+      else if (num >= 1000) result = `${(num / 1000).toFixed(1)}K`;
+      else result = num.toString();
+      cache.set(num, result);
+      return result;
+    };
+  }, []);
 
   const handleAIAnalyze = async () => {
     if (!githubToken) {
@@ -168,15 +194,12 @@ export const RepositoryCard: React.FC<RepositoryCardProps> = ({
       return;
     }
 
-    // 如果已经分析过，询问用户是否要重新分析
     if (repository.analyzed_at) {
       const confirmMessage = language === 'zh'
-        ? `此仓库已于 ${new Date(repository.analyzed_at).toLocaleString()} 进行过AI分析。\n\n是否要重新分析？这将覆盖现有的分析结果。`
-        : `This repository was analyzed on ${new Date(repository.analyzed_at).toLocaleString()}.\n\nDo you want to re-analyze? This will overwrite the existing analysis results.`;
+        ? `此仓库已于 ${new Date(repository.analyzed_at).toLocaleString()} 进行过AI分析。\n\n是否要重新分析？`
+        : `This repository was analyzed on ${new Date(repository.analyzed_at).toLocaleString()}.\n\nDo you want to re-analyze?`;
 
-      if (!confirm(confirmMessage)) {
-        return;
-      }
+      if (!confirm(confirmMessage)) return;
     }
 
     setLoading(true);
@@ -184,149 +207,75 @@ export const RepositoryCard: React.FC<RepositoryCardProps> = ({
       const githubApi = new GitHubApiService(githubToken);
       const aiService = new AIService(activeConfig, language);
 
-      // 获取README内容
       const [owner, name] = repository.full_name.split('/');
       const readmeContent = await githubApi.getRepositoryReadme(owner, name);
-
-      // 获取自定义分类名称列表
       const customCategoryNames = customCategories.map(cat => cat.name);
 
-      // AI分析
       const analysis = await aiService.analyzeRepository(repository, readmeContent, customCategoryNames);
 
-      // 更新仓库信息
       const updatedRepo = {
         ...repository,
         ai_summary: analysis.summary,
         ai_tags: analysis.tags,
         ai_platforms: analysis.platforms,
         analyzed_at: new Date().toISOString(),
-        analysis_failed: false // 分析成功，清除失败标记
+        analysis_failed: false
       };
 
       updateRepository(updatedRepo);
-
-      const successMessage = repository.analyzed_at
-        ? (language === 'zh' ? 'AI重新分析完成！' : 'AI re-analysis completed!')
-        : (language === 'zh' ? 'AI分析完成！' : 'AI analysis completed!');
-
-      alert(successMessage);
+      alert(language === 'zh' ? 'AI分析完成！' : 'AI analysis completed!');
     } catch (error) {
       console.error('AI analysis failed:', error);
-      
-      // 标记为分析失败
-      const failedRepo = {
+      updateRepository({
         ...repository,
         analyzed_at: new Date().toISOString(),
         analysis_failed: true
-      };
-      
-      updateRepository(failedRepo);
-      
-      alert(language === 'zh' ? 'AI分析失败，请检查AI配置和网络连接。' : 'AI analysis failed. Please check AI configuration and network connection.');
+      });
+      alert(language === 'zh' ? 'AI分析失败，请检查配置。' : 'AI analysis failed. Please check configuration.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Convert GitHub URL to DeepWiki URL
-  const getDeepWikiUrl = (githubUrl: string) => {
-    return githubUrl.replace('github.com', 'deepwiki.com');
-  };
+  const getDeepWikiUrl = (githubUrl: string) => githubUrl.replace('github.com', 'deepwiki.com');
+  const getZreadUrl = (fullName: string) => `https://zread.ai/${fullName}`;
 
-  // Convert GitHub URL to Zread URL
-  const getZreadUrl = (fullName: string) => {
-    return `https://zread.ai/${fullName}`;
-  };
-
-  // 根据切换状态决定显示的内容
-  const getDisplayContent = () => {
+  // 缓存计算属性
+  const displayContent = useMemo(() => {
     if (repository.custom_description) {
-      return {
-        content: repository.custom_description,
-        isCustom: true
-      };
+      return { content: repository.custom_description, isCustom: true };
     } else if (showAISummary && repository.analysis_failed) {
       return {
-        content: repository.description || (language === 'zh' ? '暂无描述' : 'No description available'),
-        isAI: false,
-        isFailed: true
+        content: repository.description || (language === 'zh' ? '暂无描述' : 'No description'),
+        isAI: false, isFailed: true
       };
     } else if (showAISummary && repository.ai_summary) {
-      return {
-        content: repository.ai_summary,
-        isAI: true
-      };
+      return { content: repository.ai_summary, isAI: true };
     } else if (repository.description) {
-      return {
-        content: repository.description,
-        isAI: false
-      };
-    } else {
-      return {
-        content: language === 'zh' ? '暂无描述' : 'No description available',
-        isAI: false
-      };
+      return { content: repository.description, isAI: false };
     }
-  };
+    return { content: language === 'zh' ? '暂无描述' : 'No description', isAI: false };
+  }, [repository.custom_description, repository.analysis_failed, repository.ai_summary, repository.description, showAISummary, language]);
 
-  const displayContent = getDisplayContent();
-
-  // 获取显示的标签
-  const getDisplayTags = () => {
-    if (repository.custom_tags && repository.custom_tags.length > 0) {
-      return { tags: repository.custom_tags, isCustom: true };
-    } else if (repository.ai_tags && repository.ai_tags.length > 0) {
-      return { tags: repository.ai_tags, isCustom: false };
-    } else {
-      return { tags: repository.topics || [], isCustom: false };
-    }
-  };
-
-  const displayTags = getDisplayTags();
-
-  // 获取显示的分类
-  const getDisplayCategory = () => {
-    if (repository.custom_category) {
-      return repository.custom_category;
-    }
-    return null;
-  };
-
-  const displayCategory = getDisplayCategory();
-
-  // 获取AI分析按钮的提示文本
-  const getAIButtonTitle = () => {
-    if (repository.analysis_failed) {
-      const analyzeTime = new Date(repository.analyzed_at!).toLocaleString();
-      return language === 'zh'
-        ? `分析失败于 ${analyzeTime}，点击重新分析`
-        : `Analysis failed on ${analyzeTime}, click to retry`;
-    } else if (repository.analyzed_at) {
-      const analyzeTime = new Date(repository.analyzed_at).toLocaleString();
-      return language === 'zh'
-        ? `已于 ${analyzeTime} 分析过，点击重新分析`
-        : `Analyzed on ${analyzeTime}, click to re-analyze`;
-    } else {
-      return language === 'zh' ? 'AI分析此仓库' : 'Analyze with AI';
-    }
-  };
+  const displayTags = useMemo(() => {
+    if (repository.custom_tags?.length) return { tags: repository.custom_tags, isCustom: true };
+    if (repository.ai_tags?.length) return { tags: repository.ai_tags, isCustom: false };
+    return { tags: repository.topics || [], isCustom: false };
+  }, [repository.custom_tags, repository.ai_tags, repository.topics]);
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
 
   const handleUnstar = async () => {
     if (!githubToken) {
-      alert(t('未找到 GitHub Token，请重新登录。', 'GitHub token not found. Please login again.'));
+      alert(t('未找到 GitHub Token，请重新登录。', 'GitHub token not found.'));
       return;
     }
 
     const confirmMessage = language === 'zh'
-      ? `确定要取消 Star "${repository.full_name}" 吗？\n\n这将会从您的 GitHub 收藏中移除该仓库。`
-      : `Are you sure you want to unstar "${repository.full_name}"?\n\nThis will remove the repository from your GitHub stars.`;
+      ? `确定要取消 Star "${repository.full_name}" 吗？`
+      : `Unstar "${repository.full_name}"?`;
 
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+    if (!confirm(confirmMessage)) return;
 
     setUnstarring(true);
     try {
@@ -335,274 +284,307 @@ export const RepositoryCard: React.FC<RepositoryCardProps> = ({
       await githubApi.unstarRepository(owner, repo);
       deleteRepository(repository.id);
       await forceSyncToBackend();
-      const successMessage = language === 'zh'
-        ? '已成功取消 Star'
-        : 'Successfully unstarred';
-      alert(successMessage);
+      alert(t('已成功取消 Star', 'Unstarred successfully'));
     } catch (error) {
-      console.error('Failed to unstar repository:', error);
-      const errorMessage = language === 'zh'
-        ? '取消 Star 失败，请检查网络连接或重新登录。'
-        : 'Failed to unstar repository. Please check your network connection or login again.';
-      alert(errorMessage);
+      console.error('Failed to unstar:', error);
+      alert(t('取消 Star 失败', 'Failed to unstar'));
     } finally {
       setUnstarring(false);
     }
   };
 
   return (
-    <div className="repository-card bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 hover:shadow-lg transition-all duration-200 hover:border-blue-300 dark:hover:border-blue-600 flex flex-col h-full">
-      {/* Header - Repository Info */}
-      <div className="flex items-center space-x-3 mb-3">
-        <img
-          src={repository.owner.avatar_url}
-          alt={repository.owner.login}
-          className="w-8 h-8 rounded-full flex-shrink-0"
-        />
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-gray-900 dark:text-white truncate">
-            {highlightSearchTerm(repository.name, searchQuery)}
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
-            {repository.owner.login}
-          </p>
-        </div>
-      </div>
+    <>
+      <div ref={cardRef} className="group bg-surface border border-border rounded-lg p-4 hover:border-border-strong transition-colors duration-fast relative">
+        {/* Header: Avatar + Name + Actions */}
+        <div className="flex items-start gap-3">
+          <img
+            src={repository.owner.avatar_url}
+            alt={repository.owner.login}
+            loading="lazy"
+            decoding="async"
+            className="w-8 h-8 rounded-md flex-shrink-0 bg-neutral-100"
+          />
+          <div className="flex-1 min-w-0">
+            <h3 className="font-medium text-sm text-text-primary truncate">
+              {highlightSearchTerm(repository.name, searchQuery)}
+            </h3>
+            <p className="text-xs text-text-tertiary truncate">
+              {repository.owner.login}
+            </p>
+          </div>
 
-      {/* Action Buttons Row - Left and Right Aligned */}
-      <div className="flex items-center justify-between mb-4">
-        {/* Left side: AI Analysis, Release Subscription, and Edit */}
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleAIAnalyze}
-            disabled={isLoading}
-            className={`p-2 rounded-lg transition-colors ${
-              repository.analysis_failed
-                ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800'
-                : repository.analyzed_at
-                  ? 'bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800'
-                  : 'bg-purple-100 text-purple-600 dark:bg-purple-900 dark:text-purple-400 hover:bg-purple-200 dark:hover:bg-purple-800'
-              } disabled:opacity-50`}
-            title={getAIButtonTitle()}
-          >
-            <Bot className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => toggleReleaseSubscription(repository.id)}
-            className={`p-2 rounded-lg transition-colors ${isSubscribed
-              ? 'bg-blue-100 text-blue-600 dark:bg-blue-900 dark:text-blue-400'
-              : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-              }`}
-            title={isSubscribed ? 'Unsubscribe from releases' : 'Subscribe to releases'}
-          >
-            {isSubscribed ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => setEditModalOpen(true)}
-            className="p-2 rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-400 hover:bg-orange-200 dark:hover:bg-orange-800 transition-colors"
-            title={language === 'zh' ? '编辑仓库信息' : 'Edit repository info'}
-          >
-            <Edit3 className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Right side: Zread/DeepWiki, GitHub Links, and Unstar */}
-        <div className="flex items-center space-x-2">
-          <a
-            href={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
-            title={language === 'zh' ? '在Zread中查看' : 'View on DeepWiki'}
-          >
-            <BookOpen className="w-4 h-4" />
-          </a>
-          <a
-            href={repository.html_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-            title="View on GitHub"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </a>
-          <button
-            onClick={handleUnstar}
-            disabled={unstarring}
-            className="flex items-center justify-center w-8 h-8 rounded-lg bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title={language === 'zh' ? '取消 Star' : 'Unstar'}
-          >
-            <Star className={`w-4 h-4 ${unstarring ? 'animate-pulse' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-      {/* Description with Tooltip */}
-      <div className="mb-4 flex-1">
-        <div
-          className="relative"
-          onMouseEnter={() => isTextTruncated && setShowTooltip(true)}
-          onMouseLeave={() => setShowTooltip(false)}
-        >
-          <p
-            ref={descriptionRef}
-            className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed line-clamp-3 mb-2"
-          >
-            {highlightSearchTerm(displayContent.content, searchQuery)}
-          </p>
-
-          {/* Tooltip - Only show when text is actually truncated */}
-          {isTextTruncated && showTooltip && (
-            <div className="absolute z-50 bottom-full left-0 right-0 mb-2 p-3 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-600 max-h-48 overflow-y-auto">
-              <div className="whitespace-pre-wrap break-words">
-                {highlightSearchTerm(displayContent.content, searchQuery)}
-              </div>
-              {/* Arrow */}
-              <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900 dark:border-t-gray-700"></div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center space-x-2">
-          {displayContent.isCustom && (
-            <div className="flex items-center space-x-1 text-xs text-orange-600 dark:text-orange-400">
-              <Edit3 className="w-3 h-3" />
-              <span>{language === 'zh' ? '自定义' : 'Custom'}</span>
-            </div>
-          )}
-          {displayContent.isFailed && (
-            <div className="flex items-center space-x-1 text-xs text-red-600 dark:text-red-400">
-              <Bot className="w-3 h-3" />
-              <span>{language === 'zh' ? '分析失败' : 'Analysis Failed'}</span>
-            </div>
-          )}
-          {displayContent.isAI && !displayContent.isFailed && (
-            <div className="flex items-center space-x-1 text-xs text-green-600 dark:text-green-400">
-              <Bot className="w-3 h-3" />
-              <span>{language === 'zh' ? 'AI总结' : 'AI Summary'}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Category Display */}
-      {displayCategory && (
-        <div className="mb-3">
-          <span className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded-md text-xs font-medium">
-            {displayCategory}
-          </span>
-        </div>
-      )}
-
-      {/* Tags */}
-      {displayTags.tags.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          {displayTags.tags.slice(0, 3).map((tag, index) => (
-            <span
-              key={index}
-              className="px-2 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+          {/* Quick Actions - 精简且只在hover时显示 */}
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => toggleReleaseSubscription(repository.id)}
+              className={cn(
+                'p-1.5 rounded transition-colors',
+                isSubscribed
+                  ? 'text-primary-600 bg-primary-50'
+                  : 'text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100'
+              )}
+              title={isSubscribed ? t('取消订阅', 'Unsubscribe') : t('订阅Release', 'Subscribe')}
             >
-              {highlightSearchTerm(tag, searchQuery)}
-            </span>
-          ))}
-          {repository.topics && repository.topics.length > 0 && !displayTags.isCustom && (
-            <>
-              {repository.topics.slice(0, 2).map((topic, index) => (
+              {isSubscribed ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={() => setEditModalOpen(true)}
+              className="p-1.5 rounded text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors"
+              title={t('编辑', 'Edit')}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+            <div className="relative">
+              <button
+                data-menu-button
+                onClick={() => setShowActions(!showActions)}
+                className="p-1.5 rounded text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </button>
+
+              {showActions && (
+                <div data-menu className="absolute right-0 top-full mt-1 w-32 bg-surface border border-border rounded-lg shadow-lg z-20 py-1">
+                  <a
+                    href={language === 'zh' ? getZreadUrl(repository.full_name) : getDeepWikiUrl(repository.html_url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    {language === 'zh' ? 'Zread' : 'DeepWiki'}
+                  </a>
+                  <a
+                    href={repository.html_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    GitHub
+                  </a>
+                  <button
+                    onClick={handleUnstar}
+                    disabled={unstarring}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {t('取消 Star', 'Unstar')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Description - Fixed 2 lines height */}
+        <div className="mt-2">
+          <div
+            className="relative cursor-help"
+            onMouseEnter={() => isTextTruncated && setShowTooltip(true)}
+            onMouseLeave={() => setShowTooltip(false)}
+          >
+            <p
+              ref={descriptionRef}
+              className="text-sm text-text-secondary leading-relaxed line-clamp-2 h-[3rem]"
+              style={{ lineHeight: '1.5rem' }}
+            >
+              {highlightSearchTerm(displayContent.content, searchQuery)}
+            </p>
+          </div>
+        </div>
+
+        {/* Tags - Fixed 1 line height */}
+        <div className="mt-2 h-[22px] overflow-hidden w-full">
+          {displayTags.tags.length > 0 ? (
+            <div className="flex gap-1 flex-nowrap max-h-[22px] overflow-hidden">
+              {/* Tags - show max 2 tags, +n for overflow */}
+              {displayTags.tags.slice(0, 2).map((tag, index) => (
                 <span
-                  key={`topic-${index}`}
-                  className="px-2 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded-md text-xs font-medium"
+                  key={index}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-neutral-100 text-neutral-600 text-2xs rounded flex-shrink-0"
                 >
-                  {topic}
+                  <Tag className="w-2.5 h-2.5" />
+                  {highlightSearchTerm(tag, searchQuery)}
                 </span>
               ))}
-            </>
+              {displayTags.tags.length > 2 && (
+                <span className="inline-flex items-center px-1.5 py-0.5 text-neutral-400 text-2xs flex-shrink-0">
+                  +{displayTags.tags.length - 2}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="h-full" />
           )}
         </div>
-      )}
 
-      {/* Platform Icons */}
-      {repository.ai_platforms && repository.ai_platforms.length > 0 && (
-        <div className="flex items-center space-x-2 mb-4">
-          <span className="text-xs text-gray-500 dark:text-gray-400">
-            {language === 'zh' ? '支持平台:' : 'Platforms:'}
-          </span>
-          <div className="flex space-x-1">
-            {repository.ai_platforms.slice(0, 6).map((platform, index) => {
-              const IconComponent = getPlatformIcon(platform);
-              const displayName = getPlatformDisplayName(platform);
-
-              return (
-                <div
-                  key={index}
-                  className="w-6 h-6 flex items-center justify-center bg-gray-100 dark:bg-gray-700 rounded text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors cursor-default"
-                  title={displayName}
-                >
-                  <IconComponent className="w-3 h-3" />
+        {/* Footer: Stats + Meta - 精简分隔线和间距 */}
+        <div className="mt-3 pt-3 border-t border-border-subtle">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Language */}
+              {repository.language && (
+                <div className="flex items-center gap-1.5 text-neutral-500">
+                  <div
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: getLanguageColor(repository.language) }}
+                  />
+                  <span className="text-2xs">{repository.language}</span>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Stats */}
-      <div className="space-y-3 mt-auto">
-        {/* Language and Stars */}
-        <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
-          <div className="flex items-center space-x-4">
-            {repository.language && (
-              <div className="flex items-center space-x-1">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: getLanguageColor(repository.language) }}
-                />
-                <span className="truncate max-w-20">{repository.language}</span>
+              )}
+              {/* Stars */}
+              <div className="flex items-center gap-1 text-neutral-500">
+                <Star className="w-3 h-3" />
+                <span className="text-2xs tabular-nums">{formatNumber(repository.stargazers_count)}</span>
               </div>
-            )}
-            <div className="flex items-center space-x-1">
-              <Star className="w-4 h-4" />
-              <span>{formatNumber(repository.stargazers_count)}</span>
+            </div>
+
+            {/* AI Status - 更简洁 */}
+            <div className="flex items-center">
+              {repository.analysis_failed ? (
+                <button
+                  onClick={handleAIAnalyze}
+                  disabled={isLoading}
+                  className="p-1 rounded text-red-500 hover:bg-red-50 transition-colors"
+                  title={t('分析失败，点击重试', 'Analysis failed, click to retry')}
+                >
+                  <AlertCircle className="w-4 h-4" />
+                </button>
+              ) : repository.analyzed_at ? (
+                <button
+                  onClick={handleAIAnalyze}
+                  disabled={isLoading}
+                  className="p-1 rounded text-emerald-500 hover:bg-emerald-50 transition-colors"
+                  title={t('已分析，点击重新分析', 'Analyzed, click to re-analyze')}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleAIAnalyze}
+                  disabled={isLoading}
+                  className="p-1 rounded text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                  title={t('AI分析', 'AI Analyze')}
+                >
+                  <Bot className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            {repository.last_edited && (
-              <div className="flex items-center space-x-1 text-xs">
-                <Edit3 className="w-3 h-3 text-orange-500" />
-                <span>{language === 'zh' ? '已编辑' : 'Edited'}</span>
-              </div>
-            )}
-            {repository.analysis_failed ? (
-              <div className="flex items-center space-x-1 text-xs">
-                <div className="w-2 h-2 bg-red-500 rounded-full" />
-                <span>{language === 'zh' ? '分析失败' : 'Analysis failed'}</span>
-              </div>
-            ) : repository.analyzed_at && (
-              <div className="flex items-center space-x-1 text-xs">
-                <div className="w-2 h-2 bg-green-500 rounded-full" />
-                <span>{language === 'zh' ? 'AI已分析' : 'AI analyzed'}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Update Time - Single Row */}
-        <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-100 dark:border-gray-700">
-          <div className="flex items-center space-x-1">
-            <Calendar className="w-4 h-4 flex-shrink-0" />
-            <span className="truncate">
-              {language === 'zh' ? '最近提交' : 'Last pushed'} {formatDistanceToNow(new Date(repository.pushed_at || repository.updated_at), { addSuffix: true })}
+          {/* Update Time - 更小的字号 */}
+          <div className="flex items-center gap-1 mt-2 text-2xs text-text-tertiary">
+            <Calendar className="w-3 h-3" />
+            <span>
+              {formatDistanceToNow(new Date(repository.pushed_at || repository.updated_at), { addSuffix: true })}
             </span>
+            {repository.last_edited && (
+              <span className="ml-1 text-amber-600">
+                • {t('已编辑', 'edited')}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Repository Edit Modal */}
+      {/* Edit Modal */}
       <RepositoryEditModal
         isOpen={editModalOpen}
         onClose={() => setEditModalOpen(false)}
         repository={repository}
       />
-    </div>
+
+      {/* Tooltip - Portal to body，避免被虚拟列表裁剪 */}
+      {isTextTruncated && showTooltip && (
+        <TooltipPortal
+          cardRef={cardRef}
+          onClose={() => setShowTooltip(false)}
+        >
+          <div className="whitespace-pre-wrap break-words">
+            {highlightSearchTerm(displayContent.content, searchQuery)}
+          </div>
+        </TooltipPortal>
+      )}
+    </>
   );
 };
+
+// Tooltip Portal 组件 - 渲染到 body，避免被父容器裁剪
+interface TooltipPortalProps {
+  cardRef: React.RefObject<HTMLDivElement | null>;
+  children: React.ReactNode;
+  onClose: () => void;
+}
+
+const TooltipPortal: React.FC<TooltipPortalProps> = ({ cardRef, children, onClose }) => {
+  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  useEffect(() => {
+    const updatePosition = () => {
+      if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect();
+        const tooltipWidth = Math.min(rect.width, 400); // 最大宽度 400px
+        const left = rect.left + (rect.width - tooltipWidth) / 2; // 水平居中
+        setPosition({
+          top: rect.top - 8, // 卡片上方 8px
+          left,
+          width: tooltipWidth,
+        });
+      }
+    };
+
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [cardRef]);
+
+  if (!position) return null;
+
+  return createPortal(
+    <div
+      className="fixed z-[9999] p-4 bg-surface-elevated text-text-primary text-sm rounded-xl shadow-2xl border border-border max-h-48 overflow-y-auto"
+      style={{
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+        width: `${position.width}px`,
+        transform: 'translateY(-100%)',
+      }}
+      onMouseEnter={() => {}} // 保持显示
+      onMouseLeave={onClose}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+};
+
+// React.memo 优化 - 自定义比较函数
+const areEqual = (prevProps: RepositoryCardProps, nextProps: RepositoryCardProps): boolean => {
+  const prev = prevProps.repository;
+  const next = nextProps.repository;
+
+  return (
+    prev.id === next.id &&
+    prev.analyzed_at === next.analyzed_at &&
+    prev.analysis_failed === next.analysis_failed &&
+    prev.ai_summary === next.ai_summary &&
+    prev.ai_tags?.join(',') === next.ai_tags?.join(',') &&
+    prev.custom_description === next.custom_description &&
+    prev.custom_tags?.join(',') === next.custom_tags?.join(',') &&
+    prev.last_edited === next.last_edited &&
+    prev.stargazers_count === next.stargazers_count &&
+    prev.pushed_at === next.pushed_at &&
+    prevProps.showAISummary === nextProps.showAISummary &&
+    prevProps.searchQuery === nextProps.searchQuery
+  );
+};
+
+export const RepositoryCard = React.memo(RepositoryCardInner, areEqual);
+export default RepositoryCard;

@@ -15,7 +15,7 @@ export const RepositoryEditModal: React.FC<RepositoryEditModalProps> = ({
   onClose,
   repository
 }) => {
-  const { updateRepository, language, customCategories, repositories } = useAppStore();
+  const { updateRepository, language, customCategories } = useAppStore();
   
   const [formData, setFormData] = useState({
     description: '',
@@ -81,7 +81,7 @@ export const RepositoryEditModal: React.FC<RepositoryEditModalProps> = ({
         categoryLocked: !!repository.category_locked
       });
     }
-  }, [repository, isOpen]);
+  }, [repository, isOpen, getCurrentCategory]);
 
   const handleSave = () => {
     if (!repository) return;

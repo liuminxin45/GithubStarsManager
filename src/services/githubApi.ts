@@ -31,7 +31,7 @@ export class GitHubApiService {
 
     // 如果是starred repositories的响应，需要处理特殊格式
     if (endpoint.includes('/user/starred') && Array.isArray(data)) {
-      return data.map((item: any) => {
+      return data.map((item: Record<string, unknown>) => {
         // 如果使用了star+json格式，数据结构会不同
         if (item.starred_at && item.repo) {
           return {
@@ -101,18 +101,18 @@ export class GitHubApiService {
 
   async getRepositoryReleases(owner: string, repo: string, page = 1, perPage = 30): Promise<Release[]> {
     try {
-      const releases = await this.makeRequest<any[]>(
+      const releases = await this.makeRequest<Record<string, unknown>[]>(
         `/repos/${owner}/${repo}/releases?page=${page}&per_page=${perPage}`
       );
       
       return releases.map(release => ({
-        id: release.id,
-        tag_name: release.tag_name,
-        name: release.name || release.tag_name,
-        body: release.body || '',
-        published_at: release.published_at,
-        html_url: release.html_url,
-        assets: release.assets || [],
+        id: release.id as number,
+        tag_name: release.tag_name as string,
+        name: (release.name as string) || (release.tag_name as string),
+        body: (release.body as string) || '',
+        published_at: release.published_at as string,
+        html_url: release.html_url as string,
+        assets: (release.assets as unknown[]) || [],
         repository: {
           id: 0, // Will be set by caller
           full_name: `${owner}/${repo}`,
@@ -157,18 +157,18 @@ export class GitHubApiService {
     perPage = 10
   ): Promise<Release[]> {
     try {
-      let endpoint = `/repos/${owner}/${repo}/releases?per_page=${perPage}`;
+      const endpoint = `/repos/${owner}/${repo}/releases?per_page=${perPage}`;
       
-      const releases = await this.makeRequest<any[]>(endpoint);
+      const releases = await this.makeRequest<Record<string, unknown>[]>(endpoint);
       
       const mappedReleases = releases.map(release => ({
-        id: release.id,
-        tag_name: release.tag_name,
-        name: release.name || release.tag_name,
-        body: release.body || '',
-        published_at: release.published_at,
-        html_url: release.html_url,
-        assets: release.assets || [],
+        id: release.id as number,
+        tag_name: release.tag_name as string,
+        name: (release.name as string) || (release.tag_name as string),
+        body: (release.body as string) || '',
+        published_at: release.published_at as string,
+        html_url: release.html_url as string,
+        assets: (release.assets as unknown[]) || [],
         repository: {
           id: 0, // Will be set by caller
           full_name: `${owner}/${repo}`,
@@ -198,7 +198,7 @@ export class GitHubApiService {
   }
 
   async checkRateLimit(): Promise<{ remaining: number; reset: number }> {
-    const response = await this.makeRequest<any>('/rate_limit');
+    const response = await this.makeRequest<{rate: {remaining: number; reset: number}}>('/rate_limit');
     return {
       remaining: response.rate.remaining,
       reset: response.rate.reset,

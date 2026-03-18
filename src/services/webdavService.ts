@@ -1,10 +1,19 @@
 import { WebDAVConfig } from '../types';
+import { backend } from './backendAdapter';
 
 export class WebDAVService {
   private config: WebDAVConfig;
+  private useProxy: boolean;
 
   constructor(config: WebDAVConfig) {
     this.config = config;
+    // 检测后端是否可用
+    this.useProxy = backend.isAvailable;
+    if (this.useProxy) {
+      console.log('[WebDAV] 使用后端代理模式');
+    } else {
+      console.log('[WebDAV] 使用直连模式（后端不可用）');
+    }
   }
 
   // 压缩JSON数据，减少传输大小
@@ -79,54 +88,61 @@ export class WebDAVService {
 
   private getFullPath(filename: string): string {
     const basePath = this.config.path.endsWith('/') ? this.config.path : `${this.config.path}/`;
-    return `${this.config.url}${basePath}${filename}`;
+    return `${basePath}${filename}`;
   }
 
-  private handleNetworkError(error: any, operation: string): never {
+  private handleNetworkError(error: { name?: string; message?: string }, operation: string): never {
     console.error(`WebDAV ${operation} failed:`, error);
-    
+
     // Check for CORS-related errors (most common issue)
     const isCorsError = (
-      (error.name === 'TypeError' && error.message.includes('Failed to fetch')) ||
-      (error.message && error.message.includes('NetworkError when attempting to fetch resource')) ||
+      (error.name === 'TypeError' && error.message?.includes('Failed to fetch')) ||
+      (error.message?.includes('NetworkError when attempting to fetch resource')) ||
       (error.name === 'NetworkError') ||
-      (error.message && error.message.includes('NetworkError'))
+      (error.message?.includes('NetworkError'))
     );
 
     if (isCorsError) {
       throw new Error(`CORS策略阻止了连接到WebDAV服务器。
 
-这是一个常见的浏览器安全限制。要解决此问题，您需要：
+当前使用的是直连模式。建议解决方案：
 
-1. 在WebDAV服务器上配置CORS头：
-   • Access-Control-Allow-Origin: ${window.location.origin}
-   • Access-Control-Allow-Methods: GET, PUT, PROPFIND, HEAD, OPTIONS, MKCOL
-   • Access-Control-Allow-Headers: Authorization, Content-Type, Depth
+1. 【推荐】启用后端服务使用代理模式：
+   npm run dev:all
 
-2. 常见WebDAV服务器配置示例：
+2. 或在WebDAV服务器上配置CORS头（坚果云不支持）
 
-   Apache (.htaccess):
-   Header always set Access-Control-Allow-Origin "${window.location.origin}"
-   Header always set Access-Control-Allow-Methods "GET, PUT, PROPFIND, HEAD, OPTIONS, MKCOL"
-   Header always set Access-Control-Allow-Headers "Authorization, Content-Type, Depth"
-
-   Nginx:
-   add_header Access-Control-Allow-Origin "${window.location.origin}";
-   add_header Access-Control-Allow-Methods "GET, PUT, PROPFIND, HEAD, OPTIONS, MKCOL";
-   add_header Access-Control-Allow-Headers "Authorization, Content-Type, Depth";
-
-3. 其他检查项：
-   • 确保WebDAV服务器正在运行
-   • 验证URL格式正确（包含协议 http:// 或 https://）
-   • 如果应用使用HTTPS，WebDAV服务器也应使用HTTPS
+3. 或使用浏览器插件临时禁用CORS（仅开发）
 
 技术详情: ${error.message}`);
     }
-    
+
     throw new Error(`WebDAV ${operation} 失败: ${error.message || '未知错误'}`);
   }
 
+  // 实例方法：测试当前配置的连接
   async testConnection(): Promise<boolean> {
+    // ===== 代理模式 =====
+    if (this.useProxy) {
+      try {
+        // 先同步配置到后端
+        await this.syncConfigToBackend();
+
+        const response = await backend.proxyWebDAV(
+          this.config.id,
+          'PROPFIND',
+          this.config.path,
+          undefined,
+          { 'Depth': '0' }
+        );
+        return response.ok || response.status === 207;
+      } catch (error) {
+        console.error('WebDAV proxy test failed:', error);
+        return false;
+      }
+    }
+
+    // ===== 直连模式 =====
     try {
       // 验证URL格式
       if (!this.config.url.startsWith('http://') && !this.config.url.startsWith('https://')) {
@@ -165,11 +181,11 @@ export class WebDAVService {
         return propfindResponse.ok || propfindResponse.status === 207;
       } catch (fetchError) {
         clearTimeout(timeoutId);
-        
+
         if (fetchError.name === 'AbortError') {
           throw new Error('连接超时。请检查WebDAV服务器是否可访问。');
         }
-        
+
         throw fetchError;
       }
     } catch (error) {
@@ -178,6 +194,65 @@ export class WebDAVService {
   }
 
   async uploadFile(filename: string, content: string): Promise<boolean> {
+    // ===== 代理模式 =====
+    if (this.useProxy) {
+      try {
+        // 同步配置到后端
+        await this.syncConfigToBackend();
+
+        // 分析文件大小并压缩数据
+        const fileAnalysis = this.analyzeFileSize(content);
+        const compressedContent = this.compressData(content);
+
+        if (fileAnalysis.isLarge) {
+          console.warn(`大文件备份 (${fileAnalysis.sizeKB}KB):`, fileAnalysis.suggestions.join(', '));
+        }
+
+        console.log(`文件大小: ${fileAnalysis.sizeKB}KB，压缩后: ${Math.round(compressedContent.length / 1024)}KB`);
+
+        // 确保目录存在
+        await this.ensureDirectoryExistsProxy();
+
+        // 上传文件
+        const path = this.getFullPath(filename);
+        const response = await backend.proxyWebDAV(
+          this.config.id,
+          'PUT',
+          path,
+          compressedContent,
+          { 'Content-Type': 'application/json' }
+        );
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error('身份验证失败。请检查用户名和密码。');
+          }
+          if (response.status === 403) {
+            throw new Error('访问被拒绝。请检查指定路径的权限。');
+          }
+          if (response.status === 404) {
+            throw new Error('路径未找到。请验证WebDAV URL和路径是否正确。');
+          }
+          if (response.status === 507) {
+            throw new Error('服务器存储空间不足。');
+          }
+          throw new Error(`上传失败，HTTP状态码 ${response.status}: ${response.statusText}`);
+        }
+
+        return true;
+      } catch (error) {
+        if (error.message?.includes('身份验证失败') ||
+          error.message?.includes('访问被拒绝') ||
+          error.message?.includes('路径未找到') ||
+          error.message?.includes('存储空间不足') ||
+          error.message?.includes('上传失败，HTTP状态码')) {
+          throw error;
+        }
+        throw new Error(`WebDAV 上传失败: ${error.message || '未知错误'}`);
+      }
+    }
+
+    // ===== 直连模式 =====
     try {
       // 验证URL格式
       if (!this.config.url.startsWith('http://') && !this.config.url.startsWith('https://')) {
@@ -240,7 +315,7 @@ export class WebDAVService {
           clearTimeout(timeoutId);
 
           if (fetchError.name === 'AbortError') {
-            throw new Error(`上传超时 (${finalSizeKB}KB文件，${dynamicTimeout/1000}秒限制)。建议检查网络连接或联系管理员优化服务器配置。`);
+            throw new Error(`上传超时 (${finalSizeKB}KB文件，${dynamicTimeout / 1000}秒限制)。建议检查网络连接或联系管理员优化服务器配置。`);
           }
 
           throw fetchError;
@@ -249,19 +324,74 @@ export class WebDAVService {
 
       return await this.retryUpload(uploadOperation);
     } catch (error) {
-      if (error.message.includes('身份验证失败') || 
-          error.message.includes('访问被拒绝') || 
-          error.message.includes('路径未找到') ||
-          error.message.includes('存储空间不足') ||
-          error.message.includes('上传失败，HTTP状态码') ||
-          error.message.includes('上传超时') ||
-          error.message.includes('WebDAV URL必须')) {
+      if (error.message?.includes('身份验证失败') ||
+        error.message?.includes('访问被拒绝') ||
+        error.message?.includes('路径未找到') ||
+        error.message?.includes('存储空间不足') ||
+        error.message?.includes('上传失败，HTTP状态码') ||
+        error.message?.includes('上传超时') ||
+        error.message?.includes('WebDAV URL必须')) {
         throw error; // 重新抛出特定错误
       }
       this.handleNetworkError(error, '上传');
     }
   }
 
+  // 同步配置到后端
+  private async syncConfigToBackend(): Promise<void> {
+    try {
+      // 将当前配置同步到后端数据库
+      await backend.syncWebDAVConfigs([{
+        ...this.config,
+        isActive: true
+      }]);
+    } catch (error) {
+      console.warn('[WebDAV] 同步配置到后端失败:', error);
+      // 继续尝试，后端可能已有配置
+    }
+  }
+
+  // 代理模式：确保目录存在
+  private async ensureDirectoryExistsProxy(): Promise<void> {
+    try {
+      if (!this.config.path || this.config.path === '/') {
+        return; // 根目录总是存在
+      }
+
+      // 逐级创建目录，避免服务器因中间目录不存在而返回 409/403
+      const cleanedPath = this.config.path.replace(/\/+$/, ''); // 去掉末尾斜杠
+      const segments = cleanedPath.split('/').filter(Boolean); // 去掉空段
+      let currentPath = '';
+
+      for (const seg of segments) {
+        currentPath += `/${seg}`;
+        try {
+          const res = await backend.proxyWebDAV(
+            this.config.id,
+            'MKCOL',
+            currentPath
+          );
+
+          // 201 Created（新建）或 405 Method Not Allowed（已存在）都视为成功
+          if (!res.ok && res.status !== 405) {
+            // 某些服务器对已存在目录返回 409 Conflict
+            if (res.status !== 409) {
+              console.warn(`无法创建目录 ${currentPath}，状态码: ${res.status}`);
+              break; // 不再继续往下建
+            }
+          }
+        } catch (e) {
+          console.warn(`创建目录 ${currentPath} 发生异常:`, e);
+          break;
+        }
+      }
+    } catch (error) {
+      console.warn('目录创建检查失败:', error);
+      // 不在这里抛出错误，因为目录可能已经存在
+    }
+  }
+
+  // 直连模式：确保目录存在
   private async ensureDirectoryExists(): Promise<void> {
     try {
       if (!this.config.path || this.config.path === '/') {
@@ -302,6 +432,43 @@ export class WebDAVService {
   }
 
   async downloadFile(filename: string): Promise<string | null> {
+    // ===== 代理模式 =====
+    if (this.useProxy) {
+      try {
+        await this.syncConfigToBackend();
+
+        const path = this.getFullPath(filename);
+        const response = await backend.proxyWebDAV(
+          this.config.id,
+          'GET',
+          path
+        );
+
+        if (response.status === 404) {
+          return null; // 文件未找到是预期行为
+        }
+
+        if (response.status === 401) {
+          throw new Error('身份验证失败。请检查用户名和密码。');
+        }
+
+        if (!response.ok) {
+          throw new Error(`下载失败，HTTP状态码 ${response.status}: ${response.statusText}`);
+        }
+
+        return await response.text();
+      } catch (error) {
+        if (error.message?.includes('身份验证失败')) {
+          throw error;
+        }
+        if (error.message?.includes('HTTP 404')) {
+          return null;
+        }
+        throw new Error(`WebDAV 下载失败: ${error.message || '未知错误'}`);
+      }
+    }
+
+    // ===== 直连模式 =====
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
@@ -314,37 +481,37 @@ export class WebDAVService {
           },
           signal: controller.signal,
         });
-        
+
         clearTimeout(timeoutId);
 
         if (response.ok) {
           return await response.text();
         }
-        
+
         if (response.status === 404) {
           return null; // 文件未找到是预期行为
         }
-        
+
         if (response.status === 401) {
           throw new Error('身份验证失败。请检查用户名和密码。');
         }
-        
+
         throw new Error(`下载失败，HTTP状态码 ${response.status}: ${response.statusText}`);
       } catch (fetchError) {
         clearTimeout(timeoutId);
-        
+
         if (fetchError.name === 'AbortError') {
           throw new Error('下载超时。请检查网络连接。');
         }
-        
+
         throw fetchError;
       }
     } catch (error) {
-      if (error.message.includes('身份验证失败') || 
-          error.message.includes('下载超时')) {
+      if (error.message?.includes('身份验证失败') ||
+        error.message?.includes('下载超时')) {
         throw error;
       }
-      if (error.message.includes('HTTP 404')) {
+      if (error.message?.includes('HTTP 404')) {
         return null;
       }
       this.handleNetworkError(error, '下载');
@@ -352,6 +519,26 @@ export class WebDAVService {
   }
 
   async fileExists(filename: string): Promise<boolean> {
+    // ===== 代理模式 =====
+    if (this.useProxy) {
+      try {
+        await this.syncConfigToBackend();
+
+        const path = this.getFullPath(filename);
+        const response = await backend.proxyWebDAV(
+          this.config.id,
+          'HEAD',
+          path
+        );
+
+        return response.ok;
+      } catch (error) {
+        console.error('WebDAV文件检查失败:', error);
+        return false;
+      }
+    }
+
+    // ===== 直连模式 =====
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
@@ -373,6 +560,50 @@ export class WebDAVService {
   }
 
   async listFiles(): Promise<string[]> {
+    // ===== 代理模式 =====
+    if (this.useProxy) {
+      try {
+        await this.syncConfigToBackend();
+
+        const basePath = this.config.path.endsWith('/') ? this.config.path : `${this.config.path}/`;
+
+        const response = await backend.proxyWebDAV(
+          this.config.id,
+          'PROPFIND',
+          basePath,
+          `<?xml version="1.0" encoding="utf-8" ?>
+            <D:propfind xmlns:D="DAV:">
+              <D:prop>
+                <D:displayname/>
+                <D:getlastmodified/>
+                <D:getcontentlength/>
+              </D:prop>
+            </D:propfind>`,
+          {
+            'Depth': '1',
+            'Content-Type': 'application/xml'
+          }
+        );
+
+        if (response.status === 401) {
+          throw new Error('身份验证失败。请检查用户名和密码。');
+        }
+
+        if (!response.ok && response.status !== 207) {
+          throw new Error(`列出文件失败，HTTP状态码 ${response.status}: ${response.statusText}`);
+        }
+
+        const xmlText = await response.text();
+        return this.parseFileList(xmlText, basePath);
+      } catch (error) {
+        if (error.message?.includes('身份验证失败')) {
+          throw error;
+        }
+        throw new Error(`WebDAV 列出文件失败: ${error.message || '未知错误'}`);
+      }
+    }
+
+    // ===== 直连模式 =====
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
@@ -404,82 +635,100 @@ export class WebDAVService {
 
         if (response.ok || response.status === 207) {
           const xmlText = await response.text();
-
-          // 优先用 DOMParser 解析（更可靠，兼容 displayname 缺失的服务端）
-          try {
-            const parser = new DOMParser();
-            const xml = parser.parseFromString(xmlText, 'application/xml');
-            const responses = Array.from(xml.getElementsByTagNameNS('DAV:', 'response'));
-
-            const results: string[] = [];
-
-            for (const res of responses) {
-              const hrefEl = res.getElementsByTagNameNS('DAV:', 'href')[0];
-              if (!hrefEl || !hrefEl.textContent) continue;
-              let href = hrefEl.textContent;
-
-              // 过滤掉集合自身（目录本身）
-              // 有的服务返回绝对URL，有的返回相对路径，统一去比较末尾路径
-              const normalizedCollection = collectionUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '/');
-              const normalizedHref = href.replace(/^https?:\/\//, '');
-              if (normalizedHref.endsWith(normalizedCollection)) continue;
-
-              // 提取文件名
-              try {
-                // 去掉末尾斜杠（目录）
-                href = href.replace(/\/+$/, '');
-                const parts = href.split('/').filter(Boolean);
-                if (parts.length === 0) continue;
-                const last = decodeURIComponent(parts[parts.length - 1]);
-                if (last.toLowerCase().endsWith('.json')) {
-                  results.push(last.trim());
-                }
-              } catch (_e) {
-                // 忽略单个条目解析失败
-              }
-            }
-
-            if (results.length > 0) return results;
-          } catch (_e) {
-            // DOMParser 失败时降级为正则提取 href/displayname
-            const namesFromDisplay = (xmlText.match(/<D:displayname>([^<]+)<\/D:displayname>/gi) || [])
-              .map(m => m.replace(/<\/?D:displayname>/gi, ''))
-              .map(s => s.trim())
-              .filter(name => name.toLowerCase().endsWith('.json'));
-
-            if (namesFromDisplay.length > 0) return namesFromDisplay;
-
-            const namesFromHref = (xmlText.match(/<D:href>([^<]+)<\/D:href>/gi) || [])
-              .map(m => m.replace(/<\/?D:href>/gi, ''))
-              .map(s => s.replace(/\/+$/, ''))
-              .map(s => decodeURIComponent(s.split('/').filter(Boolean).pop() || ''))
-              .map(s => s.trim())
-              .filter(name => name.toLowerCase().endsWith('.json'));
-
-            if (namesFromHref.length > 0) return namesFromHref;
-          }
+          return this.parseFileList(xmlText, basePath);
         } else if (response.status === 401) {
           throw new Error('身份验证失败。请检查用户名和密码。');
         } else {
           throw new Error(`列出文件失败，HTTP状态码 ${response.status}: ${response.statusText}`);
         }
-        return [];
       } catch (fetchError) {
         clearTimeout(timeoutId);
-        
+
         if (fetchError.name === 'AbortError') {
           throw new Error('列出文件超时。请检查网络连接。');
         }
-        
+
         throw fetchError;
       }
     } catch (error) {
-      if (error.message.includes('身份验证失败') || 
-          error.message.includes('列出文件超时')) {
+      if (error.message?.includes('身份验证失败') ||
+        error.message?.includes('列出文件超时')) {
         throw error;
       }
       this.handleNetworkError(error, '列出文件');
     }
+  }
+
+  // 解析文件列表 XML
+  private parseFileList(xmlText: string, basePath: string): string[] {
+    try {
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(xmlText, 'application/xml');
+      const responses = Array.from(xml.getElementsByTagNameNS('DAV:', 'response'));
+
+      const results: string[] = [];
+
+      for (const res of responses) {
+        const hrefEl = res.getElementsByTagNameNS('DAV:', 'href')[0];
+        if (!hrefEl?.textContent) continue;
+        let href = hrefEl.textContent;
+
+        // 过滤掉集合自身（目录本身）
+        const normalizedCollection = basePath.replace(/^https?:\/\//, '').replace(/\/+$/, '/');
+        const normalizedHref = href.replace(/^https?:\/\//, '');
+        if (normalizedHref.endsWith(normalizedCollection)) continue;
+
+        // 提取文件名
+        try {
+          href = href.replace(/\/+$/, '');
+          const parts = href.split('/').filter(Boolean);
+          if (parts.length === 0) continue;
+          const last = decodeURIComponent(parts[parts.length - 1]);
+          if (last.toLowerCase().endsWith('.json')) {
+            results.push(last.trim());
+          }
+        } catch {
+          // 忽略单个条目解析失败
+        }
+      }
+
+      return results;
+    } catch {
+      // DOMParser 失败时降级为正则提取 href/displayname
+      const namesFromDisplay = (xmlText.match(/<D:displayname>([^<]+)<\/D:displayname>/gi) || [])
+        .map(m => m.replace(/<\/?D:displayname>/gi, ''))
+        .map(s => s.trim())
+        .filter(name => name.toLowerCase().endsWith('.json'));
+
+      if (namesFromDisplay.length > 0) return namesFromDisplay;
+
+      const namesFromHref = (xmlText.match(/<D:href>([^<]+)<\/D:href>/gi) || [])
+        .map(m => m.replace(/<\/?D:href>/gi, ''))
+        .map(s => s.replace(/\/+$/, ''))
+        .map(s => decodeURIComponent(s.split('/').filter(Boolean).pop() || ''))
+        .map(s => s.trim())
+        .filter(name => name.toLowerCase().endsWith('.json'));
+
+      return namesFromHref;
+    }
+  }
+
+  // 静态方法：测试连接（向后兼容，WebDAVSection 使用）
+  static async testConnection(config: WebDAVConfig): Promise<boolean> {
+    const service = new WebDAVService(config);
+    return service.testConnection();
+  }
+
+  // 静态方法：上传文件（向后兼容）
+  static async uploadFile(config: WebDAVConfig, filename: string, content: string): Promise<boolean> {
+    const service = new WebDAVService(config);
+    return service.uploadFile(filename, content);
+  }
+
+  // 静态方法：下载文件（向后兼容）
+  static async downloadFile(config: WebDAVConfig, filename: string): Promise<string | null> {
+    const service = new WebDAVService(config);
+    return service.downloadFile(filename);
   }
 
   // 新增：验证配置的静态方法
@@ -509,8 +758,12 @@ export class WebDAVService {
     return errors;
   }
 
-  // 新增：获取服务器信息
+  // 新增：获取服务器信息（直连模式）
   async getServerInfo(): Promise<{ server?: string; davLevel?: string }> {
+    if (this.useProxy) {
+      return {}; // 代理模式下不获取服务器信息
+    }
+
     try {
       const response = await fetch(this.config.url, {
         method: 'OPTIONS',
@@ -528,7 +781,7 @@ export class WebDAVService {
     } catch (error) {
       console.warn('无法获取服务器信息:', error);
     }
-    
+
     return {};
   }
 }

@@ -1,7 +1,6 @@
 import React, { useEffect } from 'react';
 import { LoginScreen } from './components/LoginScreen';
 import { Header } from './components/Header';
-import { SearchBar } from './components/SearchBar';
 import { RepositoryList } from './components/RepositoryList';
 import { CategorySidebar } from './components/CategorySidebar';
 import { ReleaseTimeline } from './components/ReleaseTimeline';
@@ -13,17 +12,17 @@ import { backend } from './services/backendAdapter';
 import { syncFromBackend, startAutoSync, stopAutoSync } from './services/autoSync';
 
 function App() {
-  const { 
-    isAuthenticated, 
-    currentView, 
+  const {
+    isAuthenticated,
+    currentView,
     selectedCategory,
     theme,
-    searchResults,
     repositories,
+    searchResults,
     setSelectedCategory,
   } = useAppStore();
 
-  // 自动检查更新
+  // Auto check updates
   useAutoUpdateCheck();
 
   // Apply theme to document
@@ -74,15 +73,17 @@ function App() {
     switch (currentView) {
       case 'repositories':
         return (
-          <div className="flex flex-col gap-4 lg:flex-row lg:gap-6">
-            <CategorySidebar 
+          <div className="flex flex-col lg:flex-row gap-3 lg:gap-4 h-full">
+            {/* Sidebar - collapsible on mobile */}
+            <CategorySidebar
               repositories={repositories}
               selectedCategory={selectedCategory}
               onCategorySelect={setSelectedCategory}
             />
-            <div className="flex-1 space-y-6">
-              <SearchBar />
-              <RepositoryList 
+
+            {/* Main Content */}
+            <div className="flex-1 min-w-0 flex flex-col">
+              <RepositoryList
                 repositories={searchResults.length > 0 ? searchResults : repositories}
                 selectedCategory={selectedCategory}
               />
@@ -90,19 +91,27 @@ function App() {
           </div>
         );
       case 'releases':
-        return <ReleaseTimeline />;
+        return (
+          <div className="flex-1 min-w-0 flex flex-col h-full">
+            <ReleaseTimeline />
+          </div>
+        );
       case 'settings':
-        return <SettingsPanel />;
+        return (
+          <div className="h-full overflow-auto">
+            <SettingsPanel />
+          </div>
+        );
       default:
         return null;
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="h-screen flex flex-col bg-bg text-text-primary overflow-hidden">
       <UpdateNotificationBanner />
       <Header />
-      <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
+      <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-6 py-4 overflow-hidden">
         {renderCurrentView()}
       </main>
     </div>

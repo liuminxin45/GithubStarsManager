@@ -150,19 +150,51 @@ router.post('/api/proxy/webdav', async (req, res) => {
       return;
     }
 
-    const webdavConfig = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as Record<string, unknown> | undefined;
+    // 如果配置不存在，尝试从请求中获取完整配置（首次同步场景）
+    let webdavConfig: Record<string, unknown> | undefined;
+
+    const dbConfig = db.prepare('SELECT * FROM webdav_configs WHERE id = ?').get(configId) as Record<string, unknown> | undefined;
+    if (dbConfig) {
+      webdavConfig = dbConfig;
+    } else {
+      // 尝试从请求头或 body 中获取完整配置
+      const configFromRequest = (req.body as Record<string, unknown>).config as Record<string, unknown> | undefined;
+      if (configFromRequest?.url && configFromRequest?.username && configFromRequest?.password) {
+        webdavConfig = configFromRequest;
+      }
+    }
+
     if (!webdavConfig) {
       res.status(404).json({ error: 'WebDAV config not found', code: 'WEBDAV_CONFIG_NOT_FOUND' });
       return;
     }
 
-    const password = decrypt(webdavConfig.password_encrypted as string, config.encryptionKey);
+    // 解密或使用明文密码
+    let password: string;
+    const passwordEncrypted = webdavConfig.password_encrypted as string | undefined;
+    const passwordPlain = webdavConfig.password as string | undefined;
+
+    if (passwordEncrypted) {
+      try {
+        password = decrypt(passwordEncrypted, config.encryptionKey);
+      } catch {
+        res.status(500).json({ error: 'Failed to decrypt password', code: 'DECRYPT_FAILED' });
+        return;
+      }
+    } else if (passwordPlain) {
+      password = passwordPlain;
+    } else {
+      res.status(400).json({ error: 'Password not provided', code: 'PASSWORD_REQUIRED' });
+      return;
+    }
+
     const username = webdavConfig.username as string;
     const baseUrl = webdavConfig.url as string;
 
     const targetUrl = `${baseUrl}${path}`;
     const credentials = Buffer.from(`${username}:${password}`).toString('base64');
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { Authorization: _ignored, ...safeHeaders } = extraHeaders || {};
     const headers: Record<string, string> = {
       ...safeHeaders,
@@ -173,15 +205,38 @@ router.post('/api/proxy/webdav', async (req, res) => {
       headers['Content-Type'] = headers['Content-Type'] || 'application/xml';
     }
 
+    console.log(`[WebDAV Proxy] ${method} ${targetUrl}`);
+
     const result = await proxyRequest({
       url: targetUrl,
       method,
       headers,
       body: requestBody,
-      timeout: 60000,
+      timeout: 120000, // 坚果云等国内服务可能需要更长时间
     });
 
-    res.status(result.status).json(result.data);
+    console.log(`[WebDAV Proxy] ${method} ${targetUrl} -> ${result.status}`);
+
+    // 设置响应状态码
+    res.status(result.status);
+
+    // 转发响应头（排除可能导致问题的头）
+    const skipHeaders = ['content-encoding', 'transfer-encoding', 'connection', 'content-length'];
+    Object.entries(result.headers).forEach(([key, value]) => {
+      if (!skipHeaders.includes(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
+    });
+
+    // 根据内容类型返回数据
+    const contentType = result.headers['content-type'] || '';
+    if (typeof result.data === 'string') {
+      // WebDAV 返回 XML 或其他文本内容
+      res.send(result.data);
+    } else {
+      // JSON 或其他对象
+      res.json(result.data);
+    }
   } catch (err) {
     console.error('WebDAV proxy error:', err);
     res.status(500).json({ error: 'WebDAV proxy failed', code: 'WEBDAV_PROXY_FAILED' });
