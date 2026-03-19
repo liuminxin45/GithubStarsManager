@@ -23,7 +23,7 @@ win:
       arch:
         - x64
         - ia32
-  icon: dist/vite.svg
+  icon: public/icon.png
   
 nsis:
   oneClick: false
@@ -39,7 +39,7 @@ mac:
       arch:
         - x64
         - arm64
-  icon: dist/vite.svg
+  icon: public/icon.png
   category: public.app-category.productivity
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
@@ -47,7 +47,7 @@ mac:
 
 dmg:
   title: GitHub Stars Manager
-  icon: dist/vite.svg
+  icon: public/icon.png
   window:
     width: 540
     height: 380
@@ -72,7 +72,7 @@ linux:
     - target: rpm
       arch:
         - x64
-  icon: dist/vite.svg
+  icon: public/icon.png
   category: Office
   synopsis: AI-powered GitHub starred repositories management tool
   description: >
