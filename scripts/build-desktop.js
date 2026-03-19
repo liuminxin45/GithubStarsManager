@@ -23,11 +23,49 @@ if (!fs.existsSync(electronDir)) {
 
 // 3. 创建主进程文件
 const mainJs = `
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell } = require('electron');
 const path = require('path');
-const isDev = process.env.NODE_ENV === 'development';
 
+const isDev = process.env.NODE_ENV === 'development';
 let mainWindow;
+let tray = null;
+let isQuitting = false;
+
+function getIconPath() {
+  return path.join(__dirname, '../dist/icon.png');
+}
+
+function showWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+
+  tray = new Tray(getIconPath());
+  tray.setToolTip('GitHub Stars Manager');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: '显示主窗口',
+      click: () => showWindow(),
+    },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]));
+
+  tray.on('double-click', () => showWindow());
+  tray.on('click', () => showWindow());
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -35,18 +73,21 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
       webSecurity: true
     },
-    icon: path.join(__dirname, '../dist/icon.svg'),
+    icon: getIconPath(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     show: false
   });
 
-  // 加载应用
+  mainWindow.setMenuBarVisibility(false);
+  Menu.setApplicationMenu(null);
+
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
@@ -56,63 +97,20 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    
-    // 设置应用菜单
-    if (process.platform === 'darwin') {
-      const template = [
-        {
-          label: 'GitHub Stars Manager',
-          submenu: [
-            { role: 'about' },
-            { type: 'separator' },
-            { role: 'services' },
-            { type: 'separator' },
-            { role: 'hide' },
-            { role: 'hideothers' },
-            { role: 'unhide' },
-            { type: 'separator' },
-            { role: 'quit' }
-          ]
-        },
-        {
-          label: 'Edit',
-          submenu: [
-            { role: 'undo' },
-            { role: 'redo' },
-            { type: 'separator' },
-            { role: 'cut' },
-            { role: 'copy' },
-            { role: 'paste' },
-            { role: 'selectall' }
-          ]
-        },
-        {
-          label: 'View',
-          submenu: [
-            { role: 'reload' },
-            { role: 'forceReload' },
-            { role: 'toggleDevTools' },
-            { type: 'separator' },
-            { role: 'resetZoom' },
-            { role: 'zoomIn' },
-            { role: 'zoomOut' },
-            { type: 'separator' },
-            { role: 'togglefullscreen' }
-          ]
-        },
-        {
-          label: 'Window',
-          submenu: [
-            { role: 'minimize' },
-            { role: 'close' }
-          ]
-        }
-      ];
-      Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  });
+
+  mainWindow.on('minimize', (event) => {
+    event.preventDefault();
+    mainWindow.hide();
+  });
+
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
     }
   });
 
-  // 处理外部链接
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -123,22 +121,28 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createTray();
+  createWindow();
+});
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
+app.on('window-all-closed', (event) => {
+  event.preventDefault();
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (mainWindow) {
+    showWindow();
+  } else {
     createWindow();
   }
 });
 
-// 安全设置
-app.on('web-contents-created', (event, contents) => {
+app.on('web-contents-created', (_event, contents) => {
   contents.on('new-window', (event, navigationUrl) => {
     event.preventDefault();
     shell.openExternal(navigationUrl);

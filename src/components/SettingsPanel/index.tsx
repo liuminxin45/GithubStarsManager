@@ -43,7 +43,6 @@ export const SettingsPanel: React.FC = () => {
       id: 'ai' as const,
       icon: Bot,
       title: t('AI 服务', 'AI Services'),
-      description: t('管理模型、密钥和默认分析入口', 'Manage models, keys, and default analysis provider'),
       meta: t(
         activeAIConfig ? '已选择默认模型' : '未设置默认模型',
         activeAIConfig ? 'Default provider selected' : 'No default provider selected'
@@ -55,7 +54,6 @@ export const SettingsPanel: React.FC = () => {
       id: 'webdav' as const,
       icon: Cloud,
       title: t('WebDAV 备份', 'WebDAV Backup'),
-      description: t('连接云端备份并管理恢复入口', 'Connect backup storage and manage restore flow'),
       meta: t(
         activeWebDAVConfig ? '备份通道已启用' : '尚未启用备份',
         activeWebDAVConfig ? 'Backup channel is active' : 'Backup is not active'
@@ -67,7 +65,6 @@ export const SettingsPanel: React.FC = () => {
       id: 'backend' as const,
       icon: Server,
       title: t('后端同步', 'Backend Sync'),
-      description: t('连接服务端，处理跨设备同步', 'Connect the server for cross-device sync'),
       meta: t(
         backendApiSecret ? '已保存连接凭据' : '未配置连接凭据',
         backendApiSecret ? 'Credentials saved' : 'No credentials configured'
@@ -130,9 +127,6 @@ export const SettingsPanel: React.FC = () => {
                 <h1 className="text-lg font-semibold text-text-primary">
                   {t('设置', 'Settings')}
                 </h1>
-                <p className="mt-1 text-xs text-text-secondary">
-                  {t('完全沿用 Stars 页的信息层级，让配置管理也保持同样清晰。', 'The same information hierarchy as Stars, now applied to configuration management.')}
-                </p>
               </div>
 
               <Button
@@ -221,7 +215,6 @@ export const SettingsPanel: React.FC = () => {
                           <span className="text-sm font-medium text-text-primary">{section.title}</span>
                           <span className="text-xs text-text-tertiary">{section.count}</span>
                         </div>
-                        <p className="mt-1 text-xs text-text-secondary">{section.description}</p>
                         <p className="mt-2 text-xs text-text-tertiary">{section.meta}</p>
                       </div>
                     </div>
@@ -280,9 +273,6 @@ export const SettingsPanel: React.FC = () => {
                       <h2 className="text-base font-semibold text-text-primary">
                         {activeSectionData.title}
                       </h2>
-                      <p className="text-xs text-text-secondary">
-                        {activeSectionData.description}
-                      </p>
                     </div>
                   </div>
                 </div>
