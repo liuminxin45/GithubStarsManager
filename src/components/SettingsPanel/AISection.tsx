@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { AIService } from '../../services/aiService';
-import { Card, Button, Badge, Input } from '../../design-system/components';
+import { Card, Button, Badge, Input, Select } from '../../design-system/components';
 import { Spinner } from '../../design-system/components/Spinner/Spinner';
 import { useToast } from '../../design-system/hooks/useToast';
 import { cn } from '../../design-system/utils/cn';
@@ -44,6 +44,7 @@ export const AISection: React.FC = () => {
   });
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const concurrencyOptions = [1, 2, 3, 4, 5];
 
   const resetForm = () => {
     setForm({
@@ -221,6 +222,22 @@ export const AISection: React.FC = () => {
             </div>
           </Card>
         ))}
+
+        {aiConfigs.length === 0 && (
+          <Card padding="lg" className="bg-surface-sunken border-border-subtle">
+            <div className="flex flex-col items-center justify-center py-6 text-center">
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-neutral-100">
+                <Bot className="w-5 h-5 text-text-tertiary" />
+              </div>
+              <h4 className="mt-4 text-sm font-medium text-text-primary">
+                {t('还没有 AI 配置', 'No AI configurations yet')}
+              </h4>
+              <p className="mt-1 max-w-md text-sm text-text-secondary">
+                {t('这里会复用 Stars 页同样的卡片和按钮体系来管理分析服务。', 'This area uses the same card and button language as the Stars page to manage analysis providers.')}
+              </p>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* Add Button */}
@@ -257,20 +274,15 @@ export const AISection: React.FC = () => {
                     onChange={(v) => setForm({ ...form, name: v })}
                   />
 
-                  <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1.5">
-                      {t('服务提供商', 'Provider')}
-                    </label>
-                    <select
-                      value={form.apiType}
-                      onChange={(e) => handleProviderChange(e.target.value)}
-                      className="w-full h-10 px-3 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    >
-                      {AI_PROVIDERS.map(p => (
-                        <option key={p.value} value={p.value}>{p.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <Select
+                    label={t('服务提供商', 'Provider')}
+                    value={form.apiType}
+                    onChange={handleProviderChange}
+                    options={AI_PROVIDERS.map((provider) => ({
+                      value: provider.value,
+                      label: provider.label,
+                    }))}
+                  />
                 </div>
 
                 <Input
@@ -297,22 +309,30 @@ export const AISection: React.FC = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-text-secondary mb-1.5">
-                    {t('并发数', 'Concurrency')}: {form.concurrency}
-                  </label>
-                  <input
-                    type="range"
-                    min={1}
-                    max={5}
-                    value={form.concurrency}
-                    onChange={(e) => setForm({ ...form, concurrency: parseInt(e.target.value) })}
-                    className="w-full"
-                  />
-                  <p className="text-xs text-text-tertiary mt-1">
-                    {t('同时分析的仓库数量', 'Number of repositories to analyze simultaneously')}
-                  </p>
-                </div>
+                <Card padding="md" className="bg-surface-sunken border-border-subtle">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-text-primary">
+                        {t('并发数', 'Concurrency')}
+                      </p>
+                      <p className="mt-1 text-xs text-text-tertiary">
+                        {t('同时分析的仓库数量', 'Number of repositories to analyze simultaneously')}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {concurrencyOptions.map((value) => (
+                        <Button
+                          key={value}
+                          variant={form.concurrency === value ? 'primary' : 'secondary'}
+                          size="sm"
+                          onClick={() => setForm({ ...form, concurrency: value })}
+                        >
+                          {value}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
 
                 <div className="flex items-center gap-3 pt-2">
                   <Button variant="primary" onClick={handleSave}>

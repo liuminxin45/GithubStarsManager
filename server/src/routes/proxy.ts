@@ -229,7 +229,6 @@ router.post('/api/proxy/webdav', async (req, res) => {
     });
 
     // 根据内容类型返回数据
-    const contentType = result.headers['content-type'] || '';
     if (typeof result.data === 'string') {
       // WebDAV 返回 XML 或其他文本内容
       res.send(result.data);

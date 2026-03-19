@@ -355,6 +355,7 @@ class BackendAdapter {
       return false;
     }
   }
+
 }
 
 export const backend = new BackendAdapter();

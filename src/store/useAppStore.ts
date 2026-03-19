@@ -1,6 +1,19 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { AppState, Repository, Release, AIConfig, WebDAVConfig, SearchFilters, GitHubUser, Category, AssetFilter, UpdateNotification, AnalysisProgress } from '../types';
+import {
+  AppState,
+  Repository,
+  Release,
+  AIConfig,
+  WebDAVConfig,
+  SearchFilters,
+  GitHubUser,
+  Category,
+  AssetFilter,
+  UpdateNotification,
+  AnalysisProgress,
+  AppView,
+} from '../types';
 import { indexedDBStorage } from '../services/indexedDbStorage';
 
 const BACKEND_SECRET_SESSION_KEY = 'github-stars-manager-backend-secret';
@@ -71,7 +84,7 @@ interface AppActions {
   
   // UI actions
   setTheme: (theme: 'light' | 'dark') => void;
-  setCurrentView: (view: 'repositories' | 'releases' | 'settings') => void;
+  setCurrentView: (view: AppView) => void;
   setSelectedCategory: (category: string) => void;
   setLanguage: (language: 'zh' | 'en') => void;
   

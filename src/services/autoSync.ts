@@ -34,6 +34,22 @@ const _lastHash = {
   settings: '',
 };
 
+function settingsHashFromStore(state: ReturnType<typeof useAppStore.getState>): string {
+  return quickHash({
+    activeAIConfig: state.activeAIConfig,
+    activeWebDAVConfig: state.activeWebDAVConfig,
+    hasGitHubToken: Boolean(state.githubToken),
+  });
+}
+
+function settingsHashFromBackend(settings: Record<string, unknown>): string {
+  return quickHash({
+    activeAIConfig: settings.activeAIConfig ?? null,
+    activeWebDAVConfig: settings.activeWebDAVConfig ?? null,
+    hasGitHubToken: Boolean(settings.github_token),
+  });
+}
+
 function quickHash(data: unknown): string {
   return JSON.stringify(data);
 }
@@ -107,7 +123,7 @@ export async function syncFromBackend(): Promise<void> {
     }
 
     if (settingsResult.status === 'fulfilled') {
-      const hash = quickHash(settingsResult.value);
+      const hash = settingsHashFromBackend(settingsResult.value);
       if (hash !== _lastHash.settings) {
         hashes.settings = hash;
         changed.settings = true;
@@ -195,6 +211,7 @@ export async function syncToBackend(): Promise<void> {
       backend.syncSettings({
         activeAIConfig: state.activeAIConfig,
         activeWebDAVConfig: state.activeWebDAVConfig,
+        github_token: state.githubToken,
       }),
     ]);
     const [reposSync, releasesSync, aiSync, webdavSync, settingsSync] = results;
@@ -214,10 +231,7 @@ export async function syncToBackend(): Promise<void> {
     if (aiSync.status === 'fulfilled') _lastHash.ai = quickHash(state.aiConfigs);
     if (webdavSync.status === 'fulfilled') _lastHash.webdav = quickHash(state.webdavConfigs);
     if (settingsSync.status === 'fulfilled') {
-      _lastHash.settings = quickHash({
-        activeAIConfig: state.activeAIConfig,
-        activeWebDAVConfig: state.activeWebDAVConfig,
-      });
+      _lastHash.settings = settingsHashFromStore(state);
     }
   } catch (err) {
     console.error('Failed to sync to backend:', err);
@@ -274,7 +288,8 @@ export function startAutoSync(): () => void {
       state.aiConfigs !== prevState.aiConfigs ||
       state.webdavConfigs !== prevState.webdavConfigs ||
       state.activeAIConfig !== prevState.activeAIConfig ||
-      state.activeWebDAVConfig !== prevState.activeWebDAVConfig;
+      state.activeWebDAVConfig !== prevState.activeWebDAVConfig ||
+      state.githubToken !== prevState.githubToken;
 
     if (!changed) return;
 

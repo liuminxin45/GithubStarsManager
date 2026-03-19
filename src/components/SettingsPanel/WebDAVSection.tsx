@@ -267,6 +267,22 @@ export const WebDAVSection: React.FC = () => {
             </div>
           </Card>
         ))}
+
+        {webdavConfigs.length === 0 && (
+          <Card padding="lg" className="bg-surface-sunken border-border-subtle">
+            <div className="flex flex-col items-center justify-center py-6 text-center">
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-neutral-100">
+                <Cloud className="w-5 h-5 text-text-tertiary" />
+              </div>
+              <h4 className="mt-4 text-sm font-medium text-text-primary">
+                {t('还没有 WebDAV 配置', 'No WebDAV configurations yet')}
+              </h4>
+              <p className="mt-1 max-w-md text-sm text-text-secondary">
+                {t('备份配置也复用和 Stars 页一致的卡片与操作按钮体系。', 'Backup configuration now follows the same card and action button system used on the Stars page.')}
+              </p>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* Backup/Restore Actions */}
@@ -283,23 +299,48 @@ export const WebDAVSection: React.FC = () => {
             </p>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <Button
-              variant="secondary"
-              onClick={handleBackup}
-              disabled={isBackingUp}
-              leftIcon={isBackingUp ? <Spinner size="sm" /> : <Upload className="w-4 h-4" />}
-            >
-              {isBackingUp ? t('备份中...', 'Backing up...') : t('备份数据', 'Backup')}
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={handleRestore}
-              disabled={isRestoring}
-              leftIcon={isRestoring ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
-            >
-              {isRestoring ? t('恢复中...', 'Restoring...') : t('恢复数据', 'Restore')}
-            </Button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-border bg-surface-sunken p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <Upload className="w-4 h-4 text-secondary-600" />
+                <span className="text-sm font-medium text-text-primary">
+                  {t('备份到云端', 'Backup to cloud')}
+                </span>
+              </div>
+              <p className="mb-4 text-sm text-text-secondary">
+                {t('将本地数据上传到当前 WebDAV 目录。', 'Upload local data to the current WebDAV directory.')}
+              </p>
+              <Button
+                variant="secondary"
+                onClick={handleBackup}
+                disabled={isBackingUp}
+                leftIcon={isBackingUp ? <Spinner size="sm" /> : <Upload className="w-4 h-4" />}
+                className="w-full"
+              >
+                {isBackingUp ? t('备份中...', 'Backing up...') : t('备份数据', 'Backup')}
+              </Button>
+            </div>
+
+            <div className="rounded-lg border border-border bg-surface-sunken p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <Download className="w-4 h-4 text-secondary-600" />
+                <span className="text-sm font-medium text-text-primary">
+                  {t('从云端恢复', 'Restore from cloud')}
+                </span>
+              </div>
+              <p className="mb-4 text-sm text-text-secondary">
+                {t('用当前 WebDAV 备份覆盖本地数据。', 'Replace local data with the current WebDAV backup.')}
+              </p>
+              <Button
+                variant="secondary"
+                onClick={handleRestore}
+                disabled={isRestoring}
+                leftIcon={isRestoring ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
+                className="w-full"
+              >
+                {isRestoring ? t('恢复中...', 'Restoring...') : t('恢复数据', 'Restore')}
+              </Button>
+            </div>
           </div>
         </Card>
       )}

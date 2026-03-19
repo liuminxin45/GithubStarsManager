@@ -5,6 +5,20 @@ const migrations: Record<number, (db: Database.Database) => void> = {
   1: (db) => {
     initializeSchema(db);
   },
+  2: (db) => {
+    initializeSchema(db);
+  },
+  3: (db) => {
+    db.exec(`
+      DROP TABLE IF EXISTS hot_candidate_repos;
+      DROP TABLE IF EXISTS hot_snapshot_items;
+      DROP TABLE IF EXISTS hot_snapshots;
+      DROP TABLE IF EXISTS trending_snapshot_items;
+      DROP TABLE IF EXISTS trending_snapshots;
+      DROP TABLE IF EXISTS discovery_jobs;
+    `);
+    initializeSchema(db);
+  },
 };
 
 export function runMigrations(db: Database.Database): void {

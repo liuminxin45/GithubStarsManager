@@ -2,11 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Folder, Plus, Edit3, Hash
 } from 'lucide-react';
-import { Repository, Category } from '../types';
+import { Category } from '../types';
 import { useAppStore, getAllCategories } from '../store/useAppStore';
 import { CategoryEditModal } from './CategoryEditModal';
 import { Button } from '../design-system/components';
 import { cn } from '../design-system/utils/cn';
+import { Repository } from '../types';
 
 interface CategorySidebarProps {
   repositories: Repository[];
@@ -43,32 +44,7 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
   const getCategoryCount = (category: Category) => {
     if (category.id === 'all') return repositories.length;
 
-    return repositories.filter(repo => {
-      if (repo.custom_category === category.name) {
-        return true;
-      }
-
-      if (repo.ai_tags && repo.ai_tags.length > 0) {
-        return repo.ai_tags.some(tag =>
-          category.keywords.some(keyword =>
-            tag.toLowerCase().includes(keyword.toLowerCase()) ||
-            keyword.toLowerCase().includes(tag.toLowerCase())
-          )
-        );
-      }
-
-      const repoText = [
-        repo.name,
-        repo.description || '',
-        repo.language || '',
-        ...(repo.topics || []),
-        repo.ai_summary || ''
-      ].join(' ').toLowerCase();
-
-      return category.keywords.some(keyword =>
-        repoText.includes(keyword.toLowerCase())
-      );
-    }).length;
+    return repositories.filter(repo => matchesCategory(repo, category)).length;
   };
 
   const handleAddCategory = () => {
@@ -237,3 +213,21 @@ export const CategorySidebar: React.FC<CategorySidebarProps> = ({
 };
 
 export default CategorySidebar;
+
+function matchesCategory(repo: Repository, category: Category): boolean {
+  const repoCategory = repo.custom_category?.trim();
+  if (repoCategory && repoCategory === category.name) {
+    return true;
+  }
+
+  const haystack = [
+    repo.name,
+    repo.full_name,
+    repo.description || '',
+    repo.language || '',
+    ...(repo.topics || []),
+    ...(repo.ai_tags || []),
+  ].join(' ').toLowerCase();
+
+  return category.keywords.some(keyword => haystack.includes(keyword.toLowerCase()));
+}

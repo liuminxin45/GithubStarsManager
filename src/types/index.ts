@@ -104,6 +104,8 @@ export interface SearchFilters {
   isSubscribed?: boolean; // 新增：是否订阅Release
 }
 
+export type AppView = 'repositories' | 'releases' | 'settings';
+
 export interface FilterPreset {
   id: string;
   name: string;
@@ -170,7 +172,7 @@ export interface AppState {
   
   // UI
   theme: 'light' | 'dark';
-  currentView: 'repositories' | 'releases' | 'settings';
+  currentView: AppView;
   selectedCategory: string;
   language: 'zh' | 'en';
   

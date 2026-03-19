@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import {
-  Star, Settings, Calendar, Search, Moon, Sun, LogOut, RefreshCw,
+  Star, Settings, Calendar, Moon, Sun, LogOut, RefreshCw,
   Menu, X, ChevronDown
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
@@ -143,14 +143,14 @@ export const Header: React.FC<HeaderProps> = ({ className }) => {
   const navItems = [
     {
       id: 'repositories' as const,
-      label: t('仓库', 'Repos'),
-      icon: Search,
+      label: 'Stars',
+      icon: Star,
       count: repositories.length,
       badge: null,
     },
     {
       id: 'releases' as const,
-      label: t('发布', 'Releases'),
+      label: t('发布', '发布'),
       icon: Calendar,
       count: subscribedReleases.length,
       badge: unreleasedCount > 0 ? unreleasedCount : null,
@@ -202,9 +202,9 @@ export const Header: React.FC<HeaderProps> = ({ className }) => {
                       <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-medium text-white px-1">
                         {item.badge > 99 ? '99+' : item.badge}
                       </span>
-                    ) : (
+                    ) : item.count !== null ? (
                       <span className="text-xs text-text-tertiary">{item.count}</span>
-                    )}
+                    ) : null}
                   </button>
                 );
               })}

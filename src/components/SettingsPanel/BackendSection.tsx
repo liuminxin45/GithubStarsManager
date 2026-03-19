@@ -125,7 +125,7 @@ export const BackendSection: React.FC = () => {
     <div className="space-y-4">
       {/* Connection Status */}
       <Card
-        padding="md"
+        padding="sm"
         className={cn(
           status === 'connected' && 'border-success-500 bg-success-50/50',
           status === 'disconnected' && 'border-error-500 bg-error-50/50'
@@ -134,7 +134,7 @@ export const BackendSection: React.FC = () => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={cn(
-              'w-10 h-10 rounded-lg flex items-center justify-center',
+              'w-9 h-9 rounded-lg flex items-center justify-center',
               status === 'connected' && 'bg-success-100',
               status === 'disconnected' && 'bg-error-100',
               status === 'checking' && 'bg-surface-sunken'
@@ -144,13 +144,13 @@ export const BackendSection: React.FC = () => {
               {status === 'checking' && <Spinner size="sm" variant="primary" />}
             </div>
             <div>
-              <p className="font-medium text-text-primary">
+              <p className="text-sm font-medium text-text-primary">
                 {status === 'connected' && t('后端已连接', 'Backend Connected')}
                 {status === 'disconnected' && t('后端未连接', 'Backend Disconnected')}
                 {status === 'checking' && t('检查中...', 'Checking...')}
               </p>
               {health && (
-                <p className="text-sm text-text-secondary">
+                <p className="text-xs text-text-secondary">
                   {t('版本:', 'Version:')} {health.version}
                 </p>
               )}
@@ -170,13 +170,13 @@ export const BackendSection: React.FC = () => {
       </Card>
 
       {/* API Secret Configuration */}
-      <Card padding="lg">
-        <h4 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
-          <Shield className="w-5 h-5" />
+      <Card padding="md">
+        <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-text-primary">
+          <Shield className="w-4 h-4" />
           {t('API 密钥配置', 'API Secret Configuration')}
         </h4>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           <Input
             label={t('API Secret', 'API Secret')}
             type="password"
@@ -187,7 +187,8 @@ export const BackendSection: React.FC = () => {
           />
 
           <Button
-            variant="primary"
+            variant="secondary"
+            size="sm"
             onClick={handleConnect}
             disabled={!secretInput.trim()}
           >
@@ -198,22 +199,23 @@ export const BackendSection: React.FC = () => {
 
       {/* Sync Actions */}
       {status === 'connected' && (
-        <Card padding="lg">
-          <h4 className="font-semibold text-text-primary mb-4">
+        <Card padding="md">
+          <h4 className="mb-3 text-sm font-semibold text-text-primary">
             {t('数据同步', 'Data Synchronization')}
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="p-4 bg-surface-sunken rounded-lg">
-              <div className="flex items-center gap-3 mb-3">
-                <Upload className="w-5 h-5 text-primary-600" />
-                <span className="font-medium text-text-primary">{t('上传到后端', 'Upload to Backend')}</span>
+            <div className="rounded-lg border border-border-subtle bg-surface-sunken p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Upload className="w-4 h-4 text-primary-600" />
+                <span className="text-sm font-medium text-text-primary">{t('上传到后端', 'Upload to Backend')}</span>
               </div>
-              <p className="text-sm text-text-secondary mb-4">
+              <p className="mb-3 text-xs text-text-secondary">
                 {t('将本地数据上传到后端服务器', 'Upload local data to backend server')}
               </p>
               <Button
-                variant="primary"
+                variant="secondary"
+                size="sm"
                 onClick={handleSyncToBackend}
                 disabled={isSyncingTo}
                 className="w-full"
@@ -223,16 +225,17 @@ export const BackendSection: React.FC = () => {
               </Button>
             </div>
 
-            <div className="p-4 bg-surface-sunken rounded-lg">
-              <div className="flex items-center gap-3 mb-3">
-                <Download className="w-5 h-5 text-secondary-600" />
-                <span className="font-medium text-text-primary">{t('从后端恢复', 'Restore from Backend')}</span>
+            <div className="rounded-lg border border-border-subtle bg-surface-sunken p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Download className="w-4 h-4 text-secondary-600" />
+                <span className="text-sm font-medium text-text-primary">{t('从后端恢复', 'Restore from Backend')}</span>
               </div>
-              <p className="text-sm text-text-secondary mb-4">
+              <p className="mb-3 text-xs text-text-secondary">
                 {t('从后端服务器恢复数据', 'Restore data from backend server')}
               </p>
               <Button
                 variant="secondary"
+                size="sm"
                 onClick={handleSyncFromBackend}
                 disabled={isSyncingFrom}
                 className="w-full"
