@@ -277,9 +277,6 @@ export const WebDAVSection: React.FC = () => {
               <h4 className="mt-4 text-sm font-medium text-text-primary">
                 {t('还没有 WebDAV 配置', 'No WebDAV configurations yet')}
               </h4>
-              <p className="mt-1 max-w-md text-sm text-text-secondary">
-                {t('备份配置也复用和 Stars 页一致的卡片与操作按钮体系。', 'Backup configuration now follows the same card and action button system used on the Stars page.')}
-              </p>
             </div>
           </Card>
         )}

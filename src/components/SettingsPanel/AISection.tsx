@@ -232,9 +232,6 @@ export const AISection: React.FC = () => {
               <h4 className="mt-4 text-sm font-medium text-text-primary">
                 {t('还没有 AI 配置', 'No AI configurations yet')}
               </h4>
-              <p className="mt-1 max-w-md text-sm text-text-secondary">
-                {t('这里会复用 Stars 页同样的卡片和按钮体系来管理分析服务。', 'This area uses the same card and button language as the Stars page to manage analysis providers.')}
-              </p>
             </div>
           </Card>
         )}
