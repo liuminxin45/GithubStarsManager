@@ -4,13 +4,10 @@ import {
   ChevronRight,
   Cloud,
   Globe,
-  Moon,
   Server,
-  Sun,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { Button, Card } from '../../design-system/components';
-import { useTheme } from '../../design-system/hooks/useTheme';
+import { Card } from '../../design-system/components';
 import { cn } from '../../design-system/utils/cn';
 import { AISection } from './AISection';
 import { WebDAVSection } from './WebDAVSection';
@@ -24,11 +21,9 @@ export const SettingsPanel: React.FC = () => {
     webdavConfigs,
     backendApiSecret,
     language,
-    repositories,
     setLanguage,
   } = useAppStore();
 
-  const { theme, toggleTheme } = useTheme();
   const [activeSection, setActiveSection] = useState<SectionId>('ai');
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
@@ -56,21 +51,6 @@ export const SettingsPanel: React.FC = () => {
 
   const activeSectionData = sections.find(section => section.id === activeSection) ?? sections[0];
 
-  const overviewCards = [
-    {
-      label: t('AI 配置', 'AI Configs'),
-      value: aiConfigs.length,
-    },
-    {
-      label: t('备份配置', 'Backup Profiles'),
-      value: webdavConfigs.length,
-    },
-    {
-      label: t('已收藏仓库', 'Starred Repos'),
-      value: repositories.length,
-    },
-  ];
-
   const renderSection = () => {
     if (activeSection === 'ai') return <AISection />;
     if (activeSection === 'webdav') return <WebDAVSection />;
@@ -82,22 +62,15 @@ export const SettingsPanel: React.FC = () => {
       <div className="flex flex-col lg:flex-row gap-3 lg:gap-4 min-h-full">
         <aside className="w-full lg:w-64 lg:flex-shrink-0 lg:h-[calc(100vh-6rem)] lg:sticky lg:top-20 lg:overflow-y-auto">
           <Card padding="md" className="mb-3">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
               <div className="min-w-0">
                 <h1 className="text-lg font-semibold text-text-primary">
                   {t('设置', 'Settings')}
                 </h1>
+                <p className="mt-1 text-xs text-text-tertiary">
+                  {t('切换语言与管理服务配置', 'Switch language and manage service settings')}
+                </p>
               </div>
-
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleTheme}
-                className="flex-shrink-0"
-                title={t('切换主题', 'Toggle theme')}
-              >
-                {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </Button>
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -186,21 +159,6 @@ export const SettingsPanel: React.FC = () => {
         </aside>
 
         <div className="flex-1 min-w-0 flex flex-col gap-3 lg:gap-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {overviewCards.map((card) => (
-              <Card key={card.label} padding="sm" className="min-h-[92px]">
-                <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
-                  {card.label}
-                </p>
-                <div className="mt-2 flex items-end gap-2">
-                  <span className="text-xl font-semibold text-text-primary">
-                    {card.value}
-                  </span>
-                </div>
-              </Card>
-            ))}
-          </div>
-
           <Card padding="md" className="overflow-hidden">
             <div className="border-b border-border-subtle pb-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">

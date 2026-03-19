@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Cloud, Plus, Edit3, Trash2, CheckCircle,
-  Upload, Download, HardDrive
+  Upload, Download, HardDrive, Plug, ToggleLeft, ToggleRight
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { WebDAVService } from '../../services/webdavService';
@@ -10,6 +10,7 @@ import { Card, Button, Badge, Input } from '../../design-system/components';
 import { Spinner } from '../../design-system/components/Spinner/Spinner';
 import { useToast } from '../../design-system/hooks/useToast';
 import { cn } from '../../design-system/utils/cn';
+import { indexedDBStorage } from '../../services/indexedDbStorage';
 
 export const WebDAVSection: React.FC = () => {
   const {
@@ -40,6 +41,26 @@ export const WebDAVSection: React.FC = () => {
   });
 
   const t = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const storeKey = 'github-stars-manager';
+
+  const persistSnapshot = async (data: string) => {
+    await indexedDBStorage.setItem(storeKey, data);
+    await useAppStore.persist.rehydrate();
+  };
+
+  const readBackupSource = async () => {
+    const persisted = await indexedDBStorage.getItem(storeKey);
+    if (persisted) {
+      return persisted;
+    }
+
+    const legacy = localStorage.getItem(storeKey);
+    if (legacy) {
+      return legacy;
+    }
+
+    throw new Error('No data to backup');
+  };
 
   const resetForm = () => {
     setForm({
@@ -129,12 +150,11 @@ export const WebDAVSection: React.FC = () => {
       const config = webdavConfigs.find(c => c.id === activeWebDAVConfig);
       if (!config) throw new Error('Config not found');
 
-      const data = localStorage.getItem('github-stars-manager');
-      if (!data) throw new Error('No data to backup');
+      const data = await readBackupSource();
 
       const success = await WebDAVService.uploadFile(
         config,
-        `${config.path}/backup.json`,
+        'backup.json',
         data
       );
 
@@ -170,10 +190,10 @@ export const WebDAVSection: React.FC = () => {
       const config = webdavConfigs.find(c => c.id === activeWebDAVConfig);
       if (!config) throw new Error('Config not found');
 
-      const data = await WebDAVService.downloadFile(config, `${config.path}/backup.json`);
+      const data = await WebDAVService.downloadFile(config, 'backup.json');
       if (!data) throw new Error('No backup found');
 
-      localStorage.setItem('github-stars-manager', data);
+      await persistSnapshot(data);
       addToast({
         variant: 'success',
         title: t('恢复成功', 'Restore successful'),
@@ -200,7 +220,7 @@ export const WebDAVSection: React.FC = () => {
             padding="md"
             className={cn(
               'relative',
-              activeWebDAVConfig === config.id && 'border-secondary-500 ring-1 ring-secondary-500'
+              activeWebDAVConfig === config.id && 'border-border-strong ring-1 ring-border-strong'
             )}
           >
             <div className="flex items-center justify-between">
@@ -228,11 +248,16 @@ export const WebDAVSection: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <Button
-                  variant={activeWebDAVConfig === config.id ? 'secondary' : 'ghost'}
+                  variant="ghost"
                   size="sm"
                   onClick={() => setActiveWebDAVConfig(activeWebDAVConfig === config.id ? null : config.id)}
+                  className={cn(
+                    '!px-2',
+                    activeWebDAVConfig === config.id && 'text-text-primary'
+                  )}
+                  title={activeWebDAVConfig === config.id ? t('已启用', 'Enabled') : t('启用服务', 'Enable service')}
                 >
-                  {activeWebDAVConfig === config.id ? t('使用中', 'Active') : t('启用', 'Activate')}
+                  {activeWebDAVConfig === config.id ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                 </Button>
                 <Button
                   variant="ghost"
@@ -244,7 +269,7 @@ export const WebDAVSection: React.FC = () => {
                   {testingId === config.id ? (
                     <Spinner size="sm" />
                   ) : (
-                    <Cloud className="w-4 h-4" />
+                    <Plug className="w-4 h-4" />
                   )}
                 </Button>
                 <Button

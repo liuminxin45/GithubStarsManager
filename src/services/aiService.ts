@@ -4,6 +4,7 @@ import { backend } from './backendAdapter';
 export class AIService {
   private config: AIConfig;
   private language: string;
+  private readonly supportedPlatforms = ['mac', 'windows', 'linux', 'ios', 'android', 'docker', 'web', 'cli'];
 
   constructor(config: AIConfig, language: string = 'zh') {
     this.config = config;
@@ -227,14 +228,15 @@ ${options.user}` : options.user;
     tags: string[];
     platforms: string[];
   }> {
-    const prompt = this.config.useCustomPrompt && this.config.customPrompt
+    const usingCustomPrompt = !!(this.config.useCustomPrompt && this.config.customPrompt?.trim());
+    const prompt = usingCustomPrompt
       ? this.createCustomAnalysisPrompt(repository, readmeContent, customCategories)
       : this.createAnalysisPrompt(repository, readmeContent, customCategories);
     
     try {
-      const system = this.language === 'zh'
-        ? '你是一个专业的GitHub仓库分析助手。请严格按照用户指定的语言进行分析，无论原始内容是什么语言。请用中文简洁地分析仓库，提供实用的概述、分类标签和支持的平台类型。'
-        : 'You are a professional GitHub repository analysis assistant. Please strictly analyze in the language specified by the user, regardless of the original content language. Please analyze repositories concisely in English, providing practical overviews, category tags, and supported platform types.';
+      const system = usingCustomPrompt
+        ? this.createCustomAnalysisSystemPrompt()
+        : this.createAnalysisSystemPrompt();
 
       const content = await this.requestText({
         system,
@@ -243,12 +245,24 @@ ${options.user}` : options.user;
         maxTokens: 400,
       });
 
-      return this.parseAIResponse(content);
+      return this.parseAIResponse(content, repository);
     } catch (error) {
       console.error('AI analysis failed:', error);
       // 抛出错误，让调用方处理失败状态
       throw error;
     }
+  }
+
+  private createAnalysisSystemPrompt(): string {
+    return this.language === 'zh'
+      ? '你是一个专业的GitHub仓库分析助手。请严格按照用户指定的语言进行分析，无论原始内容是什么语言。请用中文简洁地分析仓库，提供实用的概述、分类标签和支持的平台类型。'
+      : 'You are a professional GitHub repository analysis assistant. Please strictly analyze in the language specified by the user, regardless of the original content language. Please analyze repositories concisely in English, providing practical overviews, category tags, and supported platform types.';
+  }
+
+  private createCustomAnalysisSystemPrompt(): string {
+    return this.language === 'zh'
+      ? '你是一个专业的GitHub仓库分析助手。请严格遵循用户给出的自定义 Prompt，不要再使用默认分析说明。始终返回合法 JSON，对象中必须包含 summary、tags、platforms 三个字段。'
+      : 'You are a professional GitHub repository analysis assistant. Follow the user custom prompt exactly and do not reuse the default analysis instructions. Always return valid JSON containing summary, tags, and platforms.';
   }
 
   private createCustomAnalysisPrompt(repository: Repository, readmeContent: string, customCategories?: string[]): string {
@@ -268,12 +282,45 @@ ${readmeContent.substring(0, 2000)}
       : '';
 
     // 替换自定义提示词中的占位符
-    let customPrompt = this.config.customPrompt || '';
+    const rawPrompt = this.config.customPrompt?.trim() || '';
+    let customPrompt = rawPrompt;
     customPrompt = customPrompt.replace(/\{REPO_INFO\}/g, repoInfo);
     customPrompt = customPrompt.replace(/\{CATEGORIES_INFO\}/g, categoriesInfo);
     customPrompt = customPrompt.replace(/\{LANGUAGE\}/g, this.language);
 
-    return customPrompt;
+    const extraContext: string[] = [];
+
+    if (!rawPrompt.includes('{REPO_INFO}')) {
+      extraContext.push(repoInfo);
+    }
+
+    if (categoriesInfo && !rawPrompt.includes('{CATEGORIES_INFO}')) {
+      extraContext.push(categoriesInfo.trim());
+    }
+
+    if (!rawPrompt.includes('{LANGUAGE}')) {
+      extraContext.push(`${this.language === 'zh' ? '输出语言' : 'Output language'}: ${this.language}`);
+    }
+
+    extraContext.push(this.createAnalysisOutputInstruction());
+
+    return [customPrompt, ...extraContext].filter(Boolean).join('\n\n').trim();
+  }
+
+  private createAnalysisOutputInstruction(): string {
+    return this.language === 'zh'
+      ? `请仅返回 JSON：
+{
+  "summary": "简洁概述",
+  "tags": ["标签1", "标签2"],
+  "platforms": ["web", "cli"]
+}`
+      : `Return JSON only:
+{
+  "summary": "Concise overview",
+  "tags": ["tag1", "tag2"],
+  "platforms": ["web", "cli"]
+}`;
   }
 
   private createAnalysisPrompt(repository: Repository, readmeContent: string, customCategories?: string[]): string {
@@ -339,33 +386,165 @@ Focus on practicality and accurate categorization to help users quickly understa
     }
   }
 
-  private parseAIResponse(content: string): { summary: string; tags: string[]; platforms: string[] } {
+  private parseAIResponse(content: string, repository: Repository): { summary: string; tags: string[]; platforms: string[] } {
+    const fallback = this.fallbackAnalysis(repository);
+
     try {
-      // Try to extract JSON from the response
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          summary: parsed.summary || (this.language === 'zh' ? '无法生成概述' : 'Unable to generate summary'),
-          tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 5) : [],
-          platforms: Array.isArray(parsed.platforms) ? parsed.platforms.slice(0, 8) : [],
-        };
+      const normalizedContent = this.stripCodeFences(content);
+
+      const parsedJson = this.extractJsonObject(normalizedContent);
+      if (parsedJson) {
+        return this.normalizeAnalysisResult(parsedJson, fallback);
       }
-      
-      // Fallback parsing
-      return {
-        summary: content.substring(0, 50) + '...',
-        tags: [],
-        platforms: [],
-      };
+
+      const parsedText = this.parsePlainTextAnalysis(normalizedContent);
+      if (parsedText.summary || parsedText.tags.length > 0 || parsedText.platforms.length > 0) {
+        return this.normalizeAnalysisResult(parsedText, fallback);
+      }
+
+      return fallback;
     } catch (error) {
       console.error('Failed to parse AI response:', error);
-      return {
-        summary: this.language === 'zh' ? '分析失败' : 'Analysis failed',
-        tags: [],
-        platforms: [],
-      };
+      return fallback;
     }
+  }
+
+  private stripCodeFences(content: string): string {
+    return content
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+  }
+
+  private extractJsonObject(content: string): Record<string, unknown> | null {
+    const trimmed = content.trim();
+
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        return JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        // fall through
+      }
+    }
+
+    for (let start = 0; start < content.length; start++) {
+      if (content[start] !== '{') continue;
+
+      let depth = 0;
+      for (let end = start; end < content.length; end++) {
+        if (content[end] === '{') depth++;
+        if (content[end] === '}') depth--;
+
+        if (depth === 0) {
+          const candidate = content.slice(start, end + 1);
+          try {
+            return JSON.parse(candidate) as Record<string, unknown>;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private parsePlainTextAnalysis(content: string): { summary?: string; tags?: string[]; platforms?: string[] } {
+    const cleaned = content.replace(/\r/g, '').trim();
+    if (!cleaned) return {};
+
+    const lines = cleaned
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    const summaryLine = lines.find(line => /^(summary|概述|简介|overview)\s*[:：]/i.test(line));
+    const tagsLine = lines.find(line => /^(tags?|标签|categories|分类)\s*[:：]/i.test(line));
+    const platformsLine = lines.find(line => /^(platforms?|平台|supported platforms?)\s*[:：]/i.test(line));
+
+    const summary = summaryLine
+      ? summaryLine.replace(/^(summary|概述|简介|overview)\s*[:：]\s*/i, '').trim()
+      : lines.find(line => !/^(tags?|标签|categories|分类|platforms?|平台|supported platforms?)\s*[:：]/i.test(line));
+
+    return {
+      summary,
+      tags: tagsLine ? this.toStringArray(tagsLine.replace(/^(tags?|标签|categories|分类)\s*[:：]\s*/i, '')) : [],
+      platforms: platformsLine ? this.toStringArray(platformsLine.replace(/^(platforms?|平台|supported platforms?)\s*[:：]\s*/i, '')) : [],
+    };
+  }
+
+  private normalizeAnalysisResult(
+    parsed: Record<string, unknown> | { summary?: string; tags?: string[]; platforms?: string[] },
+    fallback: { summary: string; tags: string[]; platforms: string[] }
+  ): { summary: string; tags: string[]; platforms: string[] } {
+    const rawSummary = typeof parsed.summary === 'string'
+      ? parsed.summary
+      : typeof (parsed as { overview?: unknown }).overview === 'string'
+        ? ((parsed as { overview?: string }).overview || '')
+        : typeof (parsed as { description?: unknown }).description === 'string'
+          ? ((parsed as { description?: string }).description || '')
+          : '';
+
+    const tags = this.toStringArray(parsed.tags ?? (parsed as { categories?: unknown }).categories).slice(0, 5);
+    const platforms = this.normalizePlatforms(parsed.platforms ?? (parsed as { platform?: unknown }).platform).slice(0, 8);
+    const summary = this.cleanSummary(rawSummary) || fallback.summary;
+
+    return {
+      summary,
+      tags: tags.length > 0 ? tags : fallback.tags,
+      platforms: platforms.length > 0 ? platforms : fallback.platforms,
+    };
+  }
+
+  private toStringArray(value: unknown): string[] {
+    const rawItems = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(/[,\n，、]/)
+        : [];
+
+    return Array.from(new Set(
+      rawItems
+        .map(item => typeof item === 'string' ? item : '')
+        .map(item => item.replace(/^[\[\]"'\s-]+|[\]"'\s-]+$/g, '').trim())
+        .filter(Boolean)
+    ));
+  }
+
+  private normalizePlatforms(value: unknown): string[] {
+    const platformMap: Record<string, string> = {
+      macos: 'mac',
+      mac: 'mac',
+      osx: 'mac',
+      windows: 'windows',
+      win: 'windows',
+      linux: 'linux',
+      ios: 'ios',
+      iphone: 'ios',
+      ipad: 'ios',
+      android: 'android',
+      docker: 'docker',
+      container: 'docker',
+      web: 'web',
+      browser: 'web',
+      cli: 'cli',
+      commandline: 'cli',
+      'command-line': 'cli',
+    };
+
+    return Array.from(new Set(
+      this.toStringArray(value)
+        .map(item => item.toLowerCase().replace(/\s+/g, '').trim())
+        .map(item => platformMap[item] || item)
+        .filter(item => this.supportedPlatforms.includes(item))
+    ));
+  }
+
+  private cleanSummary(summary: string): string {
+    return summary
+      .replace(/^["'`\s]+|["'`\s]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private fallbackAnalysis(repository: Repository): { summary: string; tags: string[]; platforms: string[] } {
