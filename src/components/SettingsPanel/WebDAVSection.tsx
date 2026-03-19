@@ -307,9 +307,6 @@ export const WebDAVSection: React.FC = () => {
                   {t('备份到云端', 'Backup to cloud')}
                 </span>
               </div>
-              <p className="mb-4 text-sm text-text-secondary">
-                {t('将本地数据上传到当前 WebDAV 目录。', 'Upload local data to the current WebDAV directory.')}
-              </p>
               <Button
                 variant="secondary"
                 onClick={handleBackup}
@@ -328,9 +325,6 @@ export const WebDAVSection: React.FC = () => {
                   {t('从云端恢复', 'Restore from cloud')}
                 </span>
               </div>
-              <p className="mb-4 text-sm text-text-secondary">
-                {t('用当前 WebDAV 备份覆盖本地数据。', 'Replace local data with the current WebDAV backup.')}
-              </p>
               <Button
                 variant="secondary"
                 onClick={handleRestore}
