@@ -245,13 +245,24 @@ export const AISection: React.FC = () => {
 
         {aiConfigs.length === 0 && (
           <Card padding="lg" className="bg-surface-sunken border-border-subtle">
-            <div className="flex flex-col items-center justify-center py-6 text-center">
-              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-neutral-100">
-                <Bot className="w-5 h-5 text-text-tertiary" />
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-neutral-100">
+                <Bot className="w-6 h-6 text-text-tertiary" />
               </div>
               <h4 className="mt-4 text-sm font-medium text-text-primary">
                 {t('还没有 AI 配置', 'No AI configurations yet')}
               </h4>
+              <p className="mt-1 text-xs text-text-tertiary mb-4">
+                {t('添加 AI 配置以启用智能分析功能', 'Add AI configuration to enable intelligent analysis')}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowForm(true)}
+                leftIcon={<Plus className="w-4 h-4" />}
+              >
+                {t('添加 AI 配置', 'Add AI Configuration')}
+              </Button>
             </div>
           </Card>
         )}

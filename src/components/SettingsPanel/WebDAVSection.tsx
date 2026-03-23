@@ -295,13 +295,24 @@ export const WebDAVSection: React.FC = () => {
 
         {webdavConfigs.length === 0 && (
           <Card padding="lg" className="bg-surface-sunken border-border-subtle">
-            <div className="flex flex-col items-center justify-center py-6 text-center">
-              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-neutral-100">
-                <Cloud className="w-5 h-5 text-text-tertiary" />
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-neutral-100">
+                <Cloud className="w-6 h-6 text-text-tertiary" />
               </div>
               <h4 className="mt-4 text-sm font-medium text-text-primary">
                 {t('还没有 WebDAV 配置', 'No WebDAV configurations yet')}
               </h4>
+              <p className="mt-1 text-xs text-text-tertiary mb-4">
+                {t('添加 WebDAV 配置以启用云端备份', 'Add WebDAV configuration to enable cloud backup')}
+              </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowForm(true)}
+                leftIcon={<Plus className="w-4 h-4" />}
+              >
+                {t('添加 WebDAV 配置', 'Add WebDAV Configuration')}
+              </Button>
             </div>
           </Card>
         )}

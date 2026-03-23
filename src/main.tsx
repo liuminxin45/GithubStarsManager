@@ -2,8 +2,6 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { ThemeProvider } from './design-system/components/ThemeProvider';
-import { ToastProvider } from './design-system/components/Toast/ToastProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 console.log('Main.tsx loading...');
@@ -19,11 +17,7 @@ const root = createRoot(rootElement);
 root.render(
   <StrictMode>
     <ErrorBoundary>
-      <ThemeProvider>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
-      </ThemeProvider>
+      <App />
     </ErrorBoundary>
   </StrictMode>
 );
