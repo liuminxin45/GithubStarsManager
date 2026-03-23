@@ -25,7 +25,9 @@ dist-ssr
 *.sw?
 .env
 release
-electron
+# electron - 保留 Electron 主进程文件
+!electron/main.js
+!electron/package.json
 
 # Backend server data
 server/data/*.db
